@@ -10,6 +10,9 @@ painlessMesh  mesh;
 
 HardwareSerial pmsSerial(1); // UART1
 
+bool pomp_State = HIGH; 
+bool turbo_State = HIGH; // Початковий стан піна
+
 PMS pms(pmsSerial);
 
 
@@ -79,25 +82,52 @@ private:
 };
 Pmm pmm;
 
+enum Cback {
+  PMF,
+  POMP,
+  TURBO1,
+  PM1
+};
 
 void receivedCallback( uint32_t from, String &msg ) {
   Cback fitback = PMF;
 
   if (msg.equals("pm1")) { fitback = PM1; }
+  if (msg.equals("pomp")) { fitback = POMP; }
+  if (msg.equals("turbo1")) { fitback = TURBO1; }
 
   switch (fitback) {
-    case PM1 :
+    case PM1 : {
         String x = ("pm155555555555555"); 
         mesh.sendSingle(624409705,x);
         pmm.state = Pmm::WAKE;
+    } break;
 
-    break;
+    case POMP : {
+        String y = ("pimpa"); 
+        mesh.sendSingle(624409705,y);
+        pomp_State = !pomp_State; 
+        digitalWrite(32, pomp_State); 
+    }break;
+
+    case TURBO1 : {
+        String x = ("turbo1"); 
+        mesh.sendSingle(624409705,x);
+        turbo_State = !turbo_State; 
+        digitalWrite(33, turbo_State); 
+    }break;
   }
 }
 
 
 void setup() {
   Serial.begin(115200);  
+
+  pinMode(32, OUTPUT);     // помпа
+  pinMode(33, OUTPUT);     // турбіна
+
+  digitalWrite(32, pomp_State); 
+  digitalWrite(33, turbo_State); 
 
   pmsSerial.begin(9600, SERIAL_8N1, 16, 17); // Налаштування UART для PMS
   pms.passiveMode();   

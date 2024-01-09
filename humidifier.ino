@@ -122,6 +122,12 @@ void receivedCallback( uint32_t from, String &msg ) {
         digitalWrite(33, turbo_State); 
     }break;
 
+        case ECHO : {
+          String x = (turbo_State == HIGH) ? "1" : "0";
+          String y = (pomp_State == HIGH) ? "1" : "0";
+          String q = "15" + x + y;
+          mesh.sendSingle(624409705,q);
+    }break;
   }
 }
 

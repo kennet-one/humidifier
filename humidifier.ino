@@ -11,7 +11,7 @@ painlessMesh  mesh;
 HardwareSerial pmsSerial(1); // UART1
 
 bool pomp_State = HIGH; 
-bool turbo_State = HIGH; // Початковий стан піна
+bool turbo_State = HIGH; 
 
 PMS pms(pmsSerial);
 
@@ -84,6 +84,7 @@ Pmm pmm;
 
 enum Cback {
   PMF,
+  ECHO,
   POMP,
   TURBO1,
   PM1
@@ -95,6 +96,7 @@ void receivedCallback( uint32_t from, String &msg ) {
   if (msg.equals("pm1")) { fitback = PM1; }
   if (msg.equals("pomp")) { fitback = POMP; }
   if (msg.equals("turbo1")) { fitback = TURBO1; }
+  if (msg.equals("echo_turb")) { fitback = ECHO; }
 
   switch (fitback) {
     case PM1 : {
@@ -104,18 +106,22 @@ void receivedCallback( uint32_t from, String &msg ) {
     } break;
 
     case POMP : {
-        String y = ("pimpa"); 
-        mesh.sendSingle(624409705,y);
+        String x = (pomp_State == HIGH) ? "1" : "0";
+        x = "13" + x;
+        mesh.sendSingle(624409705,x);
         pomp_State = !pomp_State; 
         digitalWrite(32, pomp_State); 
+
     }break;
 
     case TURBO1 : {
-        String x = ("turbo1"); 
+        String x = (turbo_State == HIGH) ? "1" : "0";
+        x = "14" + x;
         mesh.sendSingle(624409705,x);
         turbo_State = !turbo_State; 
         digitalWrite(33, turbo_State); 
     }break;
+
   }
 }
 

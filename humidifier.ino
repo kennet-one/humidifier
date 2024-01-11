@@ -1,6 +1,7 @@
 #include "HardwareSerial.h"
 #include "PMS.h"
 #include "painlessMesh.h"
+#include <Wire.h>
 
 #define   MESH_PREFIX     "kennet"
 #define   MESH_PASSWORD   "kennet123"
@@ -15,6 +16,33 @@ bool turbo_State = HIGH;
 
 PMS pms(pmsSerial);
 
+class RelayControl {
+public:
+void activRelay(int y) {
+  byte x = rdRelayBlock();
+  x &= ~(1 << y);
+  wrRelayBlock(x);
+}
+void deactivRelay(int y) {
+  byte x = rdRelayBlock();
+  x |= (1 << y);
+  wrRelayBlock(x);
+}
+void wrRelayBlock(byte x) {
+  Wire.beginTransmission(relayBlock);
+  Wire.write(x);
+  Wire.endTransmission();
+}
+private:
+const int relayBlock = 0x38; // Адреса PCA8574AD
+
+byte rdRelayBlock() {
+  Wire.requestFrom(relayBlock, (byte)1);
+  if (Wire.available()) {
+    return Wire.read();
+  }
+}
+} relControl;
 
 class Pmm {
 public:
@@ -106,11 +134,15 @@ void receivedCallback( uint32_t from, String &msg ) {
     } break;
 
     case POMP : {
-        String x = (pomp_State == HIGH) ? "1" : "0";
-        x = "13" + x;
-        mesh.sendSingle(624409705,x);
-        pomp_State = !pomp_State; 
-        digitalWrite(32, pomp_State); 
+        // String x = (pomp_State == HIGH) ? "1" : "0";
+        // x = "13" + x;
+        // mesh.sendSingle(624409705,x);
+        // pomp_State = !pomp_State; 
+        // digitalWrite(32, pomp_State); 
+        // if (turbo_State == LOW) { relControl.activRelay(3);
+        // } else { relControl.deactivRelay(3);
+        // }
+        relControl.activRelay(3);
 
     }break;
 
@@ -118,8 +150,13 @@ void receivedCallback( uint32_t from, String &msg ) {
         String x = (turbo_State == HIGH) ? "1" : "0";
         x = "14" + x;
         mesh.sendSingle(624409705,x);
-        turbo_State = !turbo_State; 
-        digitalWrite(33, turbo_State); 
+        relControl.activRelay(0);
+        // if (turbo_State == LOW) { relControl.activRelay(0);
+        // } else { relControl.deactivRelay(0);
+        // }
+        // turbo_State = !turbo_State; 
+        // digitalWrite(33, turbo_State); 
+
     }break;
 
         case ECHO : {
@@ -135,6 +172,10 @@ void receivedCallback( uint32_t from, String &msg ) {
 void setup() {
   Serial.begin(115200);  
 
+  Wire.begin(21, 22);
+
+  relControl.wrRelayBlock(0xFF);    //всі піни у стан (HIGH) піни 0-2 турбіна, 3 помпа
+
   pinMode(32, OUTPUT);     // помпа
   pinMode(33, OUTPUT);     // турбіна
 
@@ -149,7 +190,7 @@ void setup() {
 }
 
 void loop(){
-
+  relControl.activRelay(0);
   pmm.pmsIn();
   mesh.update();
 

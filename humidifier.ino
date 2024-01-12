@@ -1,7 +1,7 @@
 #include "HardwareSerial.h"
 #include "PMS.h"
 #include "painlessMesh.h"
-#include <Wire.h>
+#include "Wire.h"
 
 #define   MESH_PREFIX     "kennet"
 #define   MESH_PASSWORD   "kennet123"
@@ -10,9 +10,6 @@
 painlessMesh  mesh;
 
 HardwareSerial pmsSerial(1); // UART1
-
-bool pomp_State = HIGH; 
-bool turbo_State = HIGH; 
 
 PMS pms(pmsSerial);
 
@@ -33,6 +30,10 @@ void wrRelayBlock(byte x) {
   Wire.write(x);
   Wire.endTransmission();
 }
+
+bool pomp_State = true; 
+bool turbo_State = true; 
+
 private:
 const int relayBlock = 0x38; // Адреса PCA8574AD
 
@@ -134,34 +135,30 @@ void receivedCallback( uint32_t from, String &msg ) {
     } break;
 
     case POMP : {
-        // String x = (pomp_State == HIGH) ? "1" : "0";
-        // x = "13" + x;
-        // mesh.sendSingle(624409705,x);
-        // pomp_State = !pomp_State; 
-        // digitalWrite(32, pomp_State); 
-        // if (turbo_State == LOW) { relControl.activRelay(3);
-        // } else { relControl.deactivRelay(3);
-        // }
-        relControl.activRelay(3);
+        String x = (relControl.pomp_State == true) ? "1" : "0";
+        x = "13" + x;
+        mesh.sendSingle(624409705,x);
+        if (relControl.pomp_State) { relControl.activRelay(2);
+        } else { relControl.deactivRelay(2);
+        }
+        relControl.pomp_State = !relControl.pomp_State;
 
     }break;
 
     case TURBO1 : {
-        String x = (turbo_State == HIGH) ? "1" : "0";
+        String x = (relControl.turbo_State == true) ? "1" : "0";
         x = "14" + x;
         mesh.sendSingle(624409705,x);
-        relControl.activRelay(0);
-        // if (turbo_State == LOW) { relControl.activRelay(0);
-        // } else { relControl.deactivRelay(0);
-        // }
-        // turbo_State = !turbo_State; 
-        // digitalWrite(33, turbo_State); 
+        if (relControl.turbo_State) { relControl.activRelay(5);
+        } else { relControl.deactivRelay(5);
+        }
+        relControl.turbo_State = !relControl.turbo_State; 
 
     }break;
 
         case ECHO : {
-          String x = (turbo_State == HIGH) ? "1" : "0";
-          String y = (pomp_State == HIGH) ? "1" : "0";
+          String x = (relControl.turbo_State == true) ? "1" : "0";
+          String y = (relControl.pomp_State == true) ? "1" : "0";
           String q = "15" + x + y;
           mesh.sendSingle(624409705,q);
     }break;
@@ -174,13 +171,7 @@ void setup() {
 
   Wire.begin(21, 22);
 
-  relControl.wrRelayBlock(0xFF);    //всі піни у стан (HIGH) піни 0-2 турбіна, 3 помпа
-
-  pinMode(32, OUTPUT);     // помпа
-  pinMode(33, OUTPUT);     // турбіна
-
-  digitalWrite(32, pomp_State); 
-  digitalWrite(33, turbo_State); 
+  relControl.wrRelayBlock(0xFF);    //всі піни у стан (HIGH) 
 
   pmsSerial.begin(9600, SERIAL_8N1, 16, 17); // Налаштування UART для PMS
   pms.passiveMode();   
@@ -190,7 +181,7 @@ void setup() {
 }
 
 void loop(){
-  relControl.activRelay(0);
+
   pmm.pmsIn();
   mesh.update();
 

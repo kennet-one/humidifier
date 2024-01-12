@@ -31,8 +31,12 @@ void wrRelayBlock(byte x) {
   Wire.endTransmission();
 }
 
-bool pomp_State = true; 
 bool turbo_State = true; 
+bool turboM_State = true; 
+bool turboH_State = true; 
+bool pomp_State = true; 
+bool flowSpin = true; 
+bool ionic = true; 
 
 private:
 const int relayBlock = 0x38; // Адреса PCA8574AD
@@ -116,7 +120,9 @@ enum Cback {
   ECHO,
   POMP,
   TURBO1,
-  PM1
+  PM1,
+  FLOWS,
+  IONIC
 };
 
 void receivedCallback( uint32_t from, String &msg ) {
@@ -125,6 +131,8 @@ void receivedCallback( uint32_t from, String &msg ) {
   if (msg.equals("pm1")) { fitback = PM1; }
   if (msg.equals("pomp")) { fitback = POMP; }
   if (msg.equals("turbo1")) { fitback = TURBO1; }
+  if (msg.equals("flow")) { fitback = FLOWS; }
+  if (msg.equals("ion")) { fitback = IONIC; }
   if (msg.equals("echo_turb")) { fitback = ECHO; }
 
   switch (fitback) {
@@ -142,7 +150,6 @@ void receivedCallback( uint32_t from, String &msg ) {
         } else { relControl.deactivRelay(2);
         }
         relControl.pomp_State = !relControl.pomp_State;
-
     }break;
 
     case TURBO1 : {
@@ -153,14 +160,35 @@ void receivedCallback( uint32_t from, String &msg ) {
         } else { relControl.deactivRelay(5);
         }
         relControl.turbo_State = !relControl.turbo_State; 
-
     }break;
 
-        case ECHO : {
-          String x = (relControl.turbo_State == true) ? "1" : "0";
-          String y = (relControl.pomp_State == true) ? "1" : "0";
-          String q = "15" + x + y;
-          mesh.sendSingle(624409705,q);
+    case FLOWS : {
+        String x = (relControl.flowSpin == true) ? "1" : "0";
+        x = "16" + x;
+        mesh.sendSingle(624409705,x);
+        if (relControl.flowSpin) { relControl.activRelay(1);
+        } else { relControl.deactivRelay(1);
+        }
+        relControl.flowSpin = !relControl.flowSpin;
+    }break;
+
+    case IONIC : {
+        String x = (relControl.ionic == true) ? "1" : "0";
+        x = "17" + x;
+        mesh.sendSingle(624409705,x);
+        if (relControl.ionic) { relControl.activRelay(0);
+        } else { relControl.deactivRelay(0);
+        }
+        relControl.ionic = !relControl.ionic; 
+    }break;
+
+      case ECHO : {
+        String x = (relControl.turbo_State == true) ? "1" : "0";
+        String y = (relControl.pomp_State == true) ? "1" : "0";
+        String u = (relControl.turbo_State == true) ? "1" : "0";
+        String i = (relControl.pomp_State == true) ? "1" : "0";
+        String q = "15" + x + y + u + i;
+        mesh.sendSingle(624409705,q);
     }break;
   }
 }

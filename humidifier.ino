@@ -185,8 +185,8 @@ void receivedCallback( uint32_t from, String &msg ) {
       case ECHO : {
         String x = (relControl.turbo_State == true) ? "1" : "0";
         String y = (relControl.pomp_State == true) ? "1" : "0";
-        String u = (relControl.turbo_State == true) ? "1" : "0";
-        String i = (relControl.pomp_State == true) ? "1" : "0";
+        String u = (relControl.flowSpin == true) ? "1" : "0";
+        String i = (relControl.ionic == true) ? "1" : "0";
         String q = "15" + x + y + u + i;
         mesh.sendSingle(624409705,q);
     }break;

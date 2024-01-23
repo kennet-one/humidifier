@@ -1,7 +1,10 @@
+// Node ID: 3819463485
+
 #include "HardwareSerial.h"
 #include "PMS.h"
 #include "painlessMesh.h"
 #include "Wire.h"
+#include "FastLED.h"
 
 #define   MESH_PREFIX     "kennet"
 #define   MESH_PASSWORD   "kennet123"
@@ -9,9 +12,16 @@
 
 painlessMesh  mesh;
 
+CRGB waterLed[1];
+
 HardwareSerial pmsSerial(1); // UART1
 
 PMS pms(pmsSerial);
+
+void waterGreen (){
+  waterLed[0] = CRGB::DarkGreen;  // Встановіть світлодіод у зелений колір
+  FastLED.show();
+}
 
 class RelayControl {
 public:
@@ -122,7 +132,8 @@ enum Cback {
   TURBO1,
   PM1,
   FLOWS,
-  IONIC
+  IONIC,
+  WATG
 };
 
 void receivedCallback( uint32_t from, String &msg ) {
@@ -134,6 +145,7 @@ void receivedCallback( uint32_t from, String &msg ) {
   if (msg.equals("flow")) { fitback = FLOWS; }
   if (msg.equals("ion")) { fitback = IONIC; }
   if (msg.equals("echo_turb")) { fitback = ECHO; }
+  if (msg.equals("watG")) { fitback = WATG; }
 
   switch (fitback) {
     case PM1 : {
@@ -190,6 +202,10 @@ void receivedCallback( uint32_t from, String &msg ) {
         String q = "15" + x + y + u + i;
         mesh.sendSingle(624409705,q);
     }break;
+
+    case WATG : {
+      waterGreen ();
+    } break;
   }
 }
 
@@ -198,6 +214,12 @@ void setup() {
   Serial.begin(115200);  
 
   Wire.begin(21, 22);
+
+  FastLED.addLeds<WS2811, 27, GRB>(waterLed, 1);
+  
+  FastLED.setBrightness(50);
+  //waterLed[0] = CHSV(0, 255, 0);
+  //pinMode(32, OUTPUT);
 
   relControl.wrRelayBlock(0xFF);    //всі піни у стан (HIGH) 
 

@@ -71,6 +71,30 @@ bool pomp_State = true;
 bool flowSpin = true; 
 bool ionic = true; 
 
+void pimp () {
+  if (pomp_State) { activRelay(2);
+  } else { deactivRelay(2);
+  }
+  pomp_State = !pomp_State;
+}
+void turbine1 () {
+  if (turbo_State) { activRelay(5);
+  } else { deactivRelay(5);
+  }
+  turbo_State = !turbo_State; 
+}
+void flo () {
+  if (flowSpin) { activRelay(1);
+  } else { deactivRelay(1);
+  }
+  flowSpin = !flowSpin;
+}
+void ionn () {
+  if (ionic) { activRelay(0);
+  } else { deactivRelay(0);
+  }
+  ionic = !ionic; 
+}
 private:
 const int relayBlock = 0x38; // Адреса PCA8574AD
 
@@ -148,6 +172,23 @@ private:
 };
 Pmm pmm;
 
+void eho() {
+  String x = (relControl.turbo_State == true) ? "1" : "0";
+  String y = (relControl.pomp_State == true) ? "1" : "0";
+  String u = (relControl.flowSpin == true) ? "1" : "0";
+  String i = (relControl.ionic == true) ? "1" : "0";
+  String q = "15" + x + y + u + i;
+  mesh.sendSingle(624409705,q);
+}
+
+void power(){
+  relControl.pimp ();
+  relControl.turbine1 ();
+  relControl.flo ();
+  relControl.ionn ();
+  eho();
+}
+
 enum Cback {
   PMF,
   ECHO,
@@ -159,7 +200,8 @@ enum Cback {
   WATG,
   WATR,
   WATB,
-  WATW
+  WATW,
+  POWER
 } fitback = PMF;
 
 void receivedCallback( uint32_t from, String &msg ) {
@@ -173,7 +215,8 @@ void receivedCallback( uint32_t from, String &msg ) {
   if (msg.equals("watG")) { fitback = WATG; }
   if (msg.equals("watR")) { fitback = WATR; }
   if (msg.equals("watB")) { fitback = WATB; }
-  if (msg.equals("watW")) { fitback = WATW; }
+  if (msg.equals("watW")) { fitback = WATW; } 
+  if (msg.equals("hu_on")) { fitback = POWER; }
 
   switch (fitback) {
     case PM1 : {
@@ -186,49 +229,32 @@ void receivedCallback( uint32_t from, String &msg ) {
         String x = (relControl.pomp_State == true) ? "1" : "0";
         x = "13" + x;
         mesh.sendSingle(624409705,x);
-        if (relControl.pomp_State) { relControl.activRelay(2);
-        } else { relControl.deactivRelay(2);
-        }
-        relControl.pomp_State = !relControl.pomp_State;
+        relControl.pimp ();
     }break;
 
     case TURBO1 : {
         String x = (relControl.turbo_State == true) ? "1" : "0";
         x = "14" + x;
         mesh.sendSingle(624409705,x);
-        if (relControl.turbo_State) { relControl.activRelay(5);
-        } else { relControl.deactivRelay(5);
-        }
-        relControl.turbo_State = !relControl.turbo_State; 
+        relControl.turbine1 ();
     }break;
 
     case FLOWS : {
         String x = (relControl.flowSpin == true) ? "1" : "0";
         x = "16" + x;
         mesh.sendSingle(624409705,x);
-        if (relControl.flowSpin) { relControl.activRelay(1);
-        } else { relControl.deactivRelay(1);
-        }
-        relControl.flowSpin = !relControl.flowSpin;
+        relControl.flo ();
     }break;
 
     case IONIC : {
         String x = (relControl.ionic == true) ? "1" : "0";
         x = "17" + x;
         mesh.sendSingle(624409705,x);
-        if (relControl.ionic) { relControl.activRelay(0);
-        } else { relControl.deactivRelay(0);
-        }
-        relControl.ionic = !relControl.ionic; 
+        relControl.ionn ();
     }break;
 
       case ECHO : {
-        String x = (relControl.turbo_State == true) ? "1" : "0";
-        String y = (relControl.pomp_State == true) ? "1" : "0";
-        String u = (relControl.flowSpin == true) ? "1" : "0";
-        String i = (relControl.ionic == true) ? "1" : "0";
-        String q = "15" + x + y + u + i;
-        mesh.sendSingle(624409705,q);
+        eho();
     }break;
 
     case WATG : {
@@ -245,6 +271,10 @@ void receivedCallback( uint32_t from, String &msg ) {
 
     case WATW : {
       wLed = WLED;
+    }break;
+
+    case POWER : {
+      power();
     }break;
   }
 }

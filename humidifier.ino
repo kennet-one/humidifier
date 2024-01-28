@@ -1,5 +1,3 @@
-// Node ID: 3819463485
-
 #include "HardwareSerial.h"
 #include "PMS.h"
 #include "painlessMesh.h"
@@ -18,9 +16,35 @@ HardwareSerial pmsSerial(1); // UART1
 
 PMS pms(pmsSerial);
 
-void waterGreen (){
-  waterLed[0] = CRGB::DarkGreen;  // Встановіть світлодіод у зелений колір
-  FastLED.show();
+enum WLed {
+  BLED,
+  RLED,
+  GLED,
+  WLED
+} wLed = BLED;
+
+void stateWled (){
+  switch (wLed) {
+    case BLED : {
+      waterLed[0] = CRGB::Black;
+      FastLED.show();
+    } break;
+
+    case RLED : {
+      waterLed[0] = CRGB::Red;
+      FastLED.show();
+    } break;
+
+    case GLED : {
+      waterLed[0] = CRGB::Green;
+      FastLED.show();
+    } break;
+
+    case WLED : {
+      waterLed[0] = CRGB::White;
+      FastLED.show();
+    } break;
+  }
 }
 
 class RelayControl {
@@ -40,7 +64,6 @@ void wrRelayBlock(byte x) {
   Wire.write(x);
   Wire.endTransmission();
 }
-
 bool turbo_State = true; 
 bool turboM_State = true; 
 bool turboH_State = true; 
@@ -133,11 +156,13 @@ enum Cback {
   PM1,
   FLOWS,
   IONIC,
-  WATG
-};
+  WATG,
+  WATR,
+  WATB,
+  WATW
+} fitback = PMF;
 
 void receivedCallback( uint32_t from, String &msg ) {
-  Cback fitback = PMF;
 
   if (msg.equals("pm1")) { fitback = PM1; }
   if (msg.equals("pomp")) { fitback = POMP; }
@@ -146,6 +171,9 @@ void receivedCallback( uint32_t from, String &msg ) {
   if (msg.equals("ion")) { fitback = IONIC; }
   if (msg.equals("echo_turb")) { fitback = ECHO; }
   if (msg.equals("watG")) { fitback = WATG; }
+  if (msg.equals("watR")) { fitback = WATR; }
+  if (msg.equals("watB")) { fitback = WATB; }
+  if (msg.equals("watW")) { fitback = WATW; }
 
   switch (fitback) {
     case PM1 : {
@@ -204,22 +232,31 @@ void receivedCallback( uint32_t from, String &msg ) {
     }break;
 
     case WATG : {
-      waterGreen ();
-    } break;
+      wLed = GLED;
+    }break;
+
+    case WATR : {
+      wLed = RLED;
+    }break;
+  
+    case WATB : {
+      wLed = BLED;
+    }break;
+
+    case WATW : {
+      wLed = WLED;
+    }break;
   }
 }
-
 
 void setup() {
   Serial.begin(115200);  
 
   Wire.begin(21, 22);
 
-  FastLED.addLeds<WS2811, 27, GRB>(waterLed, 1);
+  FastLED.addLeds<WS2811, 25, BRG>(waterLed, 1);
   
   FastLED.setBrightness(50);
-  //waterLed[0] = CHSV(0, 255, 0);
-  //pinMode(32, OUTPUT);
 
   relControl.wrRelayBlock(0xFF);    //всі піни у стан (HIGH) 
 
@@ -232,6 +269,7 @@ void setup() {
 
 void loop(){
 
+  stateWled();
   pmm.pmsIn();
   mesh.update();
 

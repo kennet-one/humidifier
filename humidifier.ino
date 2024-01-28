@@ -189,95 +189,45 @@ void power(){
   eho();
 }
 
-enum Cback {
-  PMF,
-  ECHO,
-  POMP,
-  TURBO1,
-  PM1,
-  FLOWS,
-  IONIC,
-  WATG,
-  WATR,
-  WATB,
-  WATW,
-  POWER
-} fitback = PMF;
-
 void receivedCallback( uint32_t from, String &msg ) {
 
-  if (msg.equals("pm1")) { fitback = PM1; }
-  if (msg.equals("pomp")) { fitback = POMP; }
-  if (msg.equals("turbo1")) { fitback = TURBO1; }
-  if (msg.equals("flow")) { fitback = FLOWS; }
-  if (msg.equals("ion")) { fitback = IONIC; }
-  if (msg.equals("echo_turb")) { fitback = ECHO; }
-  if (msg.equals("watG")) { fitback = WATG; }
-  if (msg.equals("watR")) { fitback = WATR; }
-  if (msg.equals("watB")) { fitback = WATB; }
-  if (msg.equals("watW")) { fitback = WATW; } 
-  if (msg.equals("hu_on")) { fitback = POWER; }
-
-  switch (fitback) {
-    case PM1 : {
-        String x = ("pm155555555555555"); 
-        mesh.sendSingle(624409705,x);
-        pmm.state = Pmm::WAKE;
-    } break;
-
-    case POMP : {
-        String x = (relControl.pomp_State == true) ? "1" : "0";
-        x = "13" + x;
-        mesh.sendSingle(624409705,x);
-        relControl.pimp ();
-    }break;
-
-    case TURBO1 : {
-        String x = (relControl.turbo_State == true) ? "1" : "0";
-        x = "14" + x;
-        mesh.sendSingle(624409705,x);
-        relControl.turbine1 ();
-    }break;
-
-    case FLOWS : {
-        String x = (relControl.flowSpin == true) ? "1" : "0";
-        x = "16" + x;
-        mesh.sendSingle(624409705,x);
-        relControl.flo ();
-    }break;
-
-    case IONIC : {
-        String x = (relControl.ionic == true) ? "1" : "0";
-        x = "17" + x;
-        mesh.sendSingle(624409705,x);
-        relControl.ionn ();
-    }break;
-
-      case ECHO : {
-        eho();
-    }break;
-
-    case WATG : {
-      wLed = GLED;
-    }break;
-
-    case WATR : {
-      wLed = RLED;
-    }break;
-  
-    case WATB : {
-      wLed = BLED;
-    }break;
-
-    case WATW : {
-      wLed = WLED;
-    }break;
-
-    case POWER : {
-      power();
-    }break;
-  }
+  if (msg.equals("pm1")) { 
+    String x = ("pm155555555555555"); 
+    mesh.sendSingle(624409705,x);
+    pmm.state = Pmm::WAKE;
+   }
+  if (msg.equals("pomp")) { 
+    String x = (relControl.pomp_State == true) ? "1" : "0";
+    x = "13" + x;
+    mesh.sendSingle(624409705,x);
+    relControl.pimp ();
+   }
+  if (msg.equals("turbo1")) { 
+    String x = (relControl.turbo_State == true) ? "1" : "0";
+    x = "14" + x;
+    mesh.sendSingle(624409705,x);
+    relControl.turbine1 ();
+   }
+  if (msg.equals("flow")) { 
+    String x = (relControl.flowSpin == true) ? "1" : "0";
+    x = "16" + x;
+    mesh.sendSingle(624409705,x);
+    relControl.flo ();
+   }
+  if (msg.equals("ion")) { 
+    String x = (relControl.ionic == true) ? "1" : "0";
+    x = "17" + x;
+    mesh.sendSingle(624409705,x);
+    relControl.ionn ();
+   }
+  if (msg.equals("echo_turb")) { eho(); }
+  if (msg.equals("watG")) { wLed = GLED; }
+  if (msg.equals("watR")) { wLed = RLED; }
+  if (msg.equals("watB")) { wLed = BLED; }
+  if (msg.equals("watW")) { wLed = WLED;} 
+  if (msg.equals("huOn")) { power(); }
 }
+
 
 void setup() {
   Serial.begin(115200);  

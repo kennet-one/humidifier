@@ -204,9 +204,19 @@ class Combiboxi {
     }
   }
   void combi(){FastLED.setBrightness( brightness );}
+
+  void watMod(String msg) {
+    if (msg.substring(0, 2) == "18") {
+      if (msg.endsWith(String("0"))) { wLed = BLED;  mesh.sendSingle(624409705,"210");
+      } else if (msg.endsWith(String("1"))) { wLed = RLED;  mesh.sendSingle(624409705,"211");
+      } else if (msg.endsWith(String("2"))) { wLed = GLED;  mesh.sendSingle(624409705,"212");
+      } else if (msg.endsWith(String("3"))) { wLed = WLED;  mesh.sendSingle(624409705,"213");
+      }
+    }
+  }
   
   private:
-  int brightness = 50;
+  int brightness = 51;
 } combiboxi;
 
 
@@ -220,6 +230,7 @@ void power(){
 
 void receivedCallback( uint32_t from, String &msg ) {
   combiboxi.watLBox(msg);
+  combiboxi.watMod(msg);
 
   if (msg.equals("pm1")) { 
     String x = ("pm155555555555555"); 
@@ -251,19 +262,8 @@ void receivedCallback( uint32_t from, String &msg ) {
     relControl.ionn ();
    }
   if (msg.equals("echo_turb")) { eho(); }
-  if (msg.equals("watG")) { wLed = GLED; }
-  if (msg.equals("watR")) { wLed = RLED; }
-  if (msg.equals("watB")) { wLed = BLED; }
-  if (msg.equals("watW")) { wLed = WLED;} 
   if (msg.equals("huOn")) { power(); }
   
-  if (msg.substring(0, 2) == "18") {
-    if (msg.endsWith(String("0"))) { wLed = BLED;
-    } else if (msg.endsWith(String("1"))) { wLed = RLED;
-    } else if (msg.endsWith(String("2"))) { wLed = GLED;
-    } else if (msg.endsWith(String("3"))) { wLed = WLED;
-    }
-  }
 }
 
 

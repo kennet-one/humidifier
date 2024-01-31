@@ -181,6 +181,35 @@ void eho() {
   mesh.sendSingle(624409705,q);
 }
 
+class Combiboxi {
+  public:
+  void echoBri(){
+    String briEcho = "20" + String(brightness);
+    mesh.sendSingle(624409705,briEcho);
+  }
+  void watLBox(String msg) {
+    if (msg.substring(0, 2) == "19") {
+      if (msg.endsWith(String("0"))) {      brightness = 0;   echoBri();
+      } else if (msg.endsWith(String("1"))) {      brightness = 26;   echoBri();
+      } else if (msg.endsWith(String("2"))) {      brightness = 51;   echoBri();
+      } else if (msg.endsWith(String("3"))) {      brightness = 77;   echoBri();
+      } else if (msg.endsWith(String("4"))) {      brightness = 102;  echoBri();
+      } else if (msg.endsWith(String("5"))) {      brightness = 128;  echoBri();
+      } else if (msg.endsWith(String("6"))) {      brightness = 153;  echoBri();
+      } else if (msg.endsWith(String("7"))) {      brightness = 179;  echoBri();
+      } else if (msg.endsWith(String("8"))) {      brightness = 204;  echoBri();
+      } else if (msg.endsWith(String("9"))) {      brightness = 230;  echoBri();
+      } else if (msg.endsWith(String("M"))) {      brightness = 255;  echoBri();
+      }
+    }
+  }
+  void combi(){FastLED.setBrightness( brightness );}
+  
+  private:
+  int brightness = 50;
+} combiboxi;
+
+
 void power(){
   relControl.pimp ();
   relControl.turbine1 ();
@@ -190,6 +219,7 @@ void power(){
 }
 
 void receivedCallback( uint32_t from, String &msg ) {
+  combiboxi.watLBox(msg);
 
   if (msg.equals("pm1")) { 
     String x = ("pm155555555555555"); 
@@ -226,6 +256,14 @@ void receivedCallback( uint32_t from, String &msg ) {
   if (msg.equals("watB")) { wLed = BLED; }
   if (msg.equals("watW")) { wLed = WLED;} 
   if (msg.equals("huOn")) { power(); }
+  
+  if (msg.substring(0, 2) == "18") {
+    if (msg.endsWith(String("0"))) { wLed = BLED;
+    } else if (msg.endsWith(String("1"))) { wLed = RLED;
+    } else if (msg.endsWith(String("2"))) { wLed = GLED;
+    } else if (msg.endsWith(String("3"))) { wLed = WLED;
+    }
+  }
 }
 
 
@@ -249,6 +287,7 @@ void setup() {
 
 void loop(){
 
+  combiboxi.combi();
   stateWled();
   pmm.pmsIn();
   mesh.update();

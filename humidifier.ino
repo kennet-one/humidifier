@@ -266,9 +266,68 @@ void receivedCallback( uint32_t from, String &msg ) {
   
 }
 
+class TouchMe {
+public:
+void touchDetect () {
+  if(touch1detected){
+    touch1detected = false;
+    Serial.println("Touch 7 detected");
+  }
+  if(touch2detected){
+    touch2detected = false;
+    Serial.println("Touch 8 detected");
+  }
+  if(touch3detected){
+    touch3detected = false;
+    Serial.println("Touch 6 detected");
+  }
+  if(touch4detected){
+    touch4detected = false;
+    Serial.println("Touch 5 detected");
+  }
+  if(touch5detected){
+    touch5detected = false;
+    Serial.println("Touch 4 detected");
+  }
+  if(touch5detected){
+    touch5detected = false;
+    Serial.println("Touch 0 detected");
+  }
+  if(touch6detected){
+    touch6detected = false;
+    Serial.println("Touch 9 detected");
+  }
+}
+
+void touchSet () {
+  touchAttachInterrupt(T7, goTouch1, 40);
+  touchAttachInterrupt(T8, goTouch2, 40);
+  touchAttachInterrupt(T6, goTouch3, 40);
+  touchAttachInterrupt(T5, goTouch4, 40);
+  touchAttachInterrupt(T4, goTouch5, 40);
+  touchAttachInterrupt(T9, goTouch6, 40);
+}
+bool touch1detected = false;
+bool touch2detected = false;
+bool touch3detected = false;
+bool touch4detected = false;
+bool touch5detected = false;
+bool touch6detected = false;
+private:
+
+} touchMe;
+
+void goTouch1(){ touchMe.touch1detected = true;}
+void goTouch2(){ touchMe.touch2detected = true;}
+void goTouch3(){ touchMe.touch3detected = true;}
+void goTouch4(){ touchMe.touch4detected = true;}
+void goTouch5(){ touchMe.touch5detected = true;}
+void goTouch6(){ touchMe.touch6detected = true;}
 
 void setup() {
-  Serial.begin(115200);  
+  Serial.begin(115200);
+
+  touchMe.touchSet();
 
   Wire.begin(21, 22);
 
@@ -287,6 +346,7 @@ void setup() {
 
 void loop(){
 
+  touchMe.touchDetect();
   combiboxi.combi();
   stateWled();
   pmm.pmsIn();

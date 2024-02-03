@@ -268,66 +268,66 @@ void receivedCallback( uint32_t from, String &msg ) {
 
 class TouchMe {
 public:
-void touchDetect () {
-  if(touch1detected){
-    touch1detected = false;
-    Serial.println("Touch 7 detected");
+
+void touchDetect() {
+  if (touchRead(T7) < 40) {
+    if (millis() - lostTime1 > delay) { 
+      Serial.println("Touch 7 detected");
+      relControl.pimp ();
+      lostTime1 = millis();
+      }
   }
-  if(touch2detected){
-    touch2detected = false;
-    Serial.println("Touch 8 detected");
+  if (touchRead(T8) < 40) {
+    if (millis() - lostTime2 > delay) { 
+      Serial.println("Touch 8 detected");
+      relControl.ionn ();
+      lostTime2 = millis();
+      }
   }
-  if(touch3detected){
-    touch3detected = false;
-    Serial.println("Touch 6 detected");
+  if (touchRead(T6) < 40) {
+    if (millis() - lostTime3 > delay) { 
+      Serial.println("Touch 6 detected");
+      power();
+      lostTime3 = millis();
+    }
   }
-  if(touch4detected){
-    touch4detected = false;
-    Serial.println("Touch 5 detected");
+  if (touchRead(T5) < 40) {
+    if (millis() - lostTime4 > delay) { 
+      Serial.println("Touch 5 detected");
+      relControl.flo ();
+      lostTime4 = millis();
+    }
   }
-  if(touch5detected){
-    touch5detected = false;
-    Serial.println("Touch 4 detected");
+  if (touchRead(T4) < 40) {
+    if (millis() - lostTime5 > delay) { 
+      Serial.println("Touch 4 detected");
+      relControl.turbine1 ();
+      lostTime5 = millis();
+    }
   }
-  if(touch5detected){
-    touch5detected = false;
-    Serial.println("Touch 0 detected");
-  }
-  if(touch6detected){
-    touch6detected = false;
-    Serial.println("Touch 9 detected");
+  if (touchRead(T9) < 40) {
+    if (millis() - lostTime6 > delay) { 
+      Serial.println("Touch 9 detected");
+      lostTime6 = millis();
+    }
   }
 }
 
-void touchSet () {
-  touchAttachInterrupt(T7, goTouch1, 40);
-  touchAttachInterrupt(T8, goTouch2, 40);
-  touchAttachInterrupt(T6, goTouch3, 40);
-  touchAttachInterrupt(T5, goTouch4, 40);
-  touchAttachInterrupt(T4, goTouch5, 40);
-  touchAttachInterrupt(T9, goTouch6, 40);
-}
-bool touch1detected = false;
-bool touch2detected = false;
-bool touch3detected = false;
-bool touch4detected = false;
-bool touch5detected = false;
-bool touch6detected = false;
 private:
 
-} touchMe;
+unsigned long delay = 500;
 
-void goTouch1(){ touchMe.touch1detected = true;}
-void goTouch2(){ touchMe.touch2detected = true;}
-void goTouch3(){ touchMe.touch3detected = true;}
-void goTouch4(){ touchMe.touch4detected = true;}
-void goTouch5(){ touchMe.touch5detected = true;}
-void goTouch6(){ touchMe.touch6detected = true;}
+unsigned long lostTime1 = 0;
+unsigned long lostTime2 = 0;
+unsigned long lostTime3 = 0;
+unsigned long lostTime4 = 0;
+unsigned long lostTime5 = 0;
+unsigned long lostTime6 = 0;
+}touchMe;
+
 
 void setup() {
   Serial.begin(115200);
-
-  touchMe.touchSet();
 
   Wire.begin(21, 22);
 

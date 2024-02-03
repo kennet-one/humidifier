@@ -23,6 +23,28 @@ enum WLed {
   WLED
 } wLed = BLED;
 
+WLed getWLed() {
+  return wLed;
+}
+
+void ledfeedback () {
+  WLed ledf = getWLed();
+  switch (ledf) {
+    case BLED:
+      mesh.sendSingle(624409705,"210");
+      break;
+    case RLED:
+      mesh.sendSingle(624409705,"211");
+      break;
+    case GLED:
+      mesh.sendSingle(624409705,"212");
+      break;
+    case WLED:
+      mesh.sendSingle(624409705,"213");
+      break;
+  }
+}
+
 void stateWled (){
   switch (wLed) {
     case BLED : {
@@ -172,14 +194,7 @@ private:
 };
 Pmm pmm;
 
-void eho() {
-  String x = (relControl.turbo_State == true) ? "1" : "0";
-  String y = (relControl.pomp_State == true) ? "1" : "0";
-  String u = (relControl.flowSpin == true) ? "1" : "0";
-  String i = (relControl.ionic == true) ? "1" : "0";
-  String q = "15" + x + y + u + i;
-  mesh.sendSingle(624409705,q);
-}
+
 
 class Combiboxi {
   public:
@@ -219,6 +234,16 @@ class Combiboxi {
   int brightness = 51;
 } combiboxi;
 
+void eho() {
+  String x = (relControl.turbo_State == true) ? "1" : "0";
+  String y = (relControl.pomp_State == true) ? "1" : "0";
+  String u = (relControl.flowSpin == true) ? "1" : "0";
+  String i = (relControl.ionic == true) ? "1" : "0";
+  String q = "15" + x + y + u + i;
+  mesh.sendSingle(624409705,q);
+  combiboxi.echoBri ();
+  ledfeedback ();
+}
 
 void power(){
   relControl.pimp ();
@@ -264,7 +289,6 @@ void receivedCallback( uint32_t from, String &msg ) {
 
 class TouchMe {
 public:
-
 void touchDetect() {
   if (touchRead(T7) < 40) {
     if (millis() - lostTime1 > delay) { 
@@ -316,7 +340,6 @@ void touchDetect() {
 }
 
 private:
-
 unsigned long delay = 500;
 
 unsigned long lostTime1 = 0;

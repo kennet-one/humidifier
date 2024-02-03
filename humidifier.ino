@@ -238,27 +238,23 @@ void receivedCallback( uint32_t from, String &msg ) {
     pmm.state = Pmm::WAKE;
    }
   if (msg.equals("pomp")) { 
-    String x = (relControl.pomp_State == true) ? "1" : "0";
-    x = "13" + x;
-    mesh.sendSingle(624409705,x);
+
+    mesh.sendSingle(624409705, "13" + (relControl.pomp_State ? String("1") : String("0")));
     relControl.pimp ();
    }
   if (msg.equals("turbo1")) { 
-    String x = (relControl.turbo_State == true) ? "1" : "0";
-    x = "14" + x;
-    mesh.sendSingle(624409705,x);
+
+    mesh.sendSingle(624409705, "14" + (relControl.turbo_State ? String("1") : String("0")));
     relControl.turbine1 ();
    }
   if (msg.equals("flow")) { 
-    String x = (relControl.flowSpin == true) ? "1" : "0";
-    x = "16" + x;
-    mesh.sendSingle(624409705,x);
+
+    mesh.sendSingle(624409705, "16" + (relControl.flowSpin ? String("1") : String("0")));
     relControl.flo ();
    }
   if (msg.equals("ion")) { 
-    String x = (relControl.ionic == true) ? "1" : "0";
-    x = "17" + x;
-    mesh.sendSingle(624409705,x);
+
+    mesh.sendSingle(624409705, "17" + (relControl.ionic ? String("1") : String("0")));
     relControl.ionn ();
    }
   if (msg.equals("echo_turb")) { eho(); }
@@ -272,36 +268,42 @@ public:
 void touchDetect() {
   if (touchRead(T7) < 40) {
     if (millis() - lostTime1 > delay) { 
-      Serial.println("Touch 7 detected");
+
+      mesh.sendSingle(624409705, "13" + (relControl.pomp_State ? String("1") : String("0")));
       relControl.pimp ();
       lostTime1 = millis();
       }
   }
   if (touchRead(T8) < 40) {
     if (millis() - lostTime2 > delay) { 
-      Serial.println("Touch 8 detected");
+
+      mesh.sendSingle(624409705, "17" + (relControl.ionic ? String("1") : String("0")));
       relControl.ionn ();
       lostTime2 = millis();
       }
   }
   if (touchRead(T6) < 40) {
     if (millis() - lostTime3 > delay) { 
-      Serial.println("Touch 6 detected");
+
       power();
       lostTime3 = millis();
     }
   }
   if (touchRead(T5) < 40) {
     if (millis() - lostTime4 > delay) { 
-      Serial.println("Touch 5 detected");
+
+      mesh.sendSingle(624409705, "16" + (relControl.flowSpin ? String("1") : String("0")));
       relControl.flo ();
+      
       lostTime4 = millis();
     }
   }
   if (touchRead(T4) < 40) {
     if (millis() - lostTime5 > delay) { 
-      Serial.println("Touch 4 detected");
+
+      mesh.sendSingle(624409705, "14" + (relControl.turbo_State ? String("1") : String("0")));
       relControl.turbine1 ();
+      
       lostTime5 = millis();
     }
   }

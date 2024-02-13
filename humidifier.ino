@@ -292,19 +292,19 @@ void receivedCallback( uint32_t from, String &msg ) {
     mesh.sendSingle(624409705, "13" + (relControl.pomp_State ? String("1") : String("0")));
     relControl.pimp ();
    }
-  if (msg.equals("tu0")) { 
+  if (msg.equals("140")) { 
     relControl.tuurbo = RelayControl::TURBOOFF;
     mesh.sendSingle(624409705, "140");
    }
-  if (msg.equals("tu1")) { 
+  if (msg.equals("141")) { 
     relControl.tuurbo = RelayControl::TURBO1;
     mesh.sendSingle(624409705, "141");
    }
-  if (msg.equals("tu2")) { 
+  if (msg.equals("142")) { 
     relControl.tuurbo = RelayControl::TURBO2;
     mesh.sendSingle(624409705, "142");
    }
-  if (msg.equals("tu3")) { 
+  if (msg.equals("143")) { 
     relControl.tuurbo = RelayControl::TURBO3;
     mesh.sendSingle(624409705, "143");
    }

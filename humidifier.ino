@@ -86,9 +86,9 @@ void wrRelayBlock(byte x) {
   Wire.write(x);
   Wire.endTransmission();
 }
-bool turbo_State = true; 
-bool turboM_State = true; 
-bool turboH_State = true; 
+// bool turbo_State = true; 
+// bool turboM_State = true; 
+// bool turboH_State = true; 
 bool pomp_State = true; 
 bool flowSpin = true; 
 bool ionic = true; 
@@ -99,11 +99,46 @@ void pimp () {
   }
   pomp_State = !pomp_State;
 }
-void turbine1 () {
-  if (turbo_State) { activRelay(5);
-  } else { deactivRelay(5);
+// void turbine1 () {
+//   if (turbo_State) { activRelay(5);
+//   } else { deactivRelay(5);
+//   }
+//   turbo_State = !turbo_State; 
+// }
+
+enum Tuurbo {
+  TURBOOFF,
+  TURBO1,
+  TURBO2,
+  TURBO3
+} tuurbo = TURBOOFF;
+
+void fan () {
+  switch (tuurbo) {
+    case TURBOOFF:
+      deactivRelay(5);
+      deactivRelay(4);
+      deactivRelay(3);
+      break;
+    case TURBO1:
+      deactivRelay(4);
+      deactivRelay(3);
+
+      activRelay(5);
+      break;
+    case TURBO2:
+      deactivRelay(5);
+      deactivRelay(3);
+
+      activRelay(4);
+      break;
+    case TURBO3:
+      deactivRelay(5);
+      deactivRelay(4);
+
+      activRelay(3);
+      break;
   }
-  turbo_State = !turbo_State; 
 }
 void flo () {
   if (flowSpin) { activRelay(1);
@@ -235,11 +270,11 @@ class Combiboxi {
 } combiboxi;
 
 void eho() {
-  String x = (relControl.turbo_State == true) ? "1" : "0";
+  //String x = (relControl.turbo_State == true) ? "1" : "0";
   String y = (relControl.pomp_State == true) ? "1" : "0";
   String u = (relControl.flowSpin == true) ? "1" : "0";
   String i = (relControl.ionic == true) ? "1" : "0";
-  String q = "15" + x + y + u + i;
+  String q = "15" + y + u + i;
   mesh.sendSingle(624409705,q);
   combiboxi.echoBri ();
   ledfeedback ();
@@ -247,7 +282,7 @@ void eho() {
 
 void power(){
   relControl.pimp ();
-  relControl.turbine1 ();
+  //relControl.turbine1 ();
   relControl.flo ();
   relControl.ionn ();
   eho();
@@ -267,10 +302,21 @@ void receivedCallback( uint32_t from, String &msg ) {
     mesh.sendSingle(624409705, "13" + (relControl.pomp_State ? String("1") : String("0")));
     relControl.pimp ();
    }
-  if (msg.equals("turbo1")) { 
-
-    mesh.sendSingle(624409705, "14" + (relControl.turbo_State ? String("1") : String("0")));
-    relControl.turbine1 ();
+  if (msg.equals("tu0")) { 
+    relControl.tuurbo = RelayControl::TURBOOFF;
+    mesh.sendSingle(624409705, "140");
+   }
+  if (msg.equals("tu1")) { 
+    relControl.tuurbo = RelayControl::TURBO1;
+    mesh.sendSingle(624409705, "141");
+   }
+  if (msg.equals("tu2")) { 
+    relControl.tuurbo = RelayControl::TURBO2;
+    mesh.sendSingle(624409705, "142");
+   }
+  if (msg.equals("tu3")) { 
+    relControl.tuurbo = RelayControl::TURBO3;
+    mesh.sendSingle(624409705, "143");
    }
   if (msg.equals("flow")) { 
 
@@ -325,8 +371,8 @@ void touchDetect() {
   if (touchRead(T4) < 40) {
     if (millis() - lostTime5 > delay) { 
 
-      mesh.sendSingle(624409705, "14" + (relControl.turbo_State ? String("1") : String("0")));
-      relControl.turbine1 ();
+      //mesh.sendSingle(624409705, "14" + (relControl.turbo_State ? String("1") : String("0")));
+      //relControl.turbine1 ();
       
       lostTime5 = millis();
     }
@@ -371,6 +417,7 @@ void setup() {
 
 void loop(){
 
+  relControl.fan();
   touchMe.touchDetect();
   combiboxi.combi();
   stateWled();

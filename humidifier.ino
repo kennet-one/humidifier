@@ -86,9 +86,6 @@ void wrRelayBlock(byte x) {
   Wire.write(x);
   Wire.endTransmission();
 }
-// bool turbo_State = true; 
-// bool turboM_State = true; 
-// bool turboH_State = true; 
 bool pomp_State = true; 
 bool flowSpin = true; 
 bool ionic = true; 
@@ -99,12 +96,6 @@ void pimp () {
   }
   pomp_State = !pomp_State;
 }
-// void turbine1 () {
-//   if (turbo_State) { activRelay(5);
-//   } else { deactivRelay(5);
-//   }
-//   turbo_State = !turbo_State; 
-// }
 
 enum Tuurbo {
   TURBOOFF,
@@ -270,11 +261,11 @@ class Combiboxi {
 } combiboxi;
 
 void eho() {
-  //String x = (relControl.turbo_State == true) ? "1" : "0";
+  String x = String (static_cast<int>(relControl.tuurbo));
   String y = (relControl.pomp_State == true) ? "1" : "0";
   String u = (relControl.flowSpin == true) ? "1" : "0";
   String i = (relControl.ionic == true) ? "1" : "0";
-  String q = "15" + y + u + i;
+  String q = "15" + x + y + u + i;
   mesh.sendSingle(624409705,q);
   combiboxi.echoBri ();
   ledfeedback ();
@@ -298,7 +289,6 @@ void receivedCallback( uint32_t from, String &msg ) {
     pmm.state = Pmm::WAKE;
    }
   if (msg.equals("pomp")) { 
-
     mesh.sendSingle(624409705, "13" + (relControl.pomp_State ? String("1") : String("0")));
     relControl.pimp ();
    }

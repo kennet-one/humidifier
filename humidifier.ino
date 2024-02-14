@@ -143,8 +143,31 @@ void ionn () {
   }
   ionic = !ionic; 
 }
+
+void power(){
+  
+  if (tpower == false) {
+    deactivRelay(2);
+    deactivRelay(1);
+    deactivRelay(0);
+    x = tuurbo;
+    tuurbo = TURBOOFF;
+    tpower = true;
+    eho();
+  } else {
+    activRelay(2);
+    activRelay(1);
+    activRelay(0);
+    tuurbo = x;
+    tpower = false;
+    eho();
+  }
+}
 private:
 const int relayBlock = 0x38; // Адреса PCA8574AD
+
+bool tpower = true;
+RelayControl::Tuurbo x = TURBO1;
 
 byte rdRelayBlock() {
   Wire.requestFrom(relayBlock, (byte)1);
@@ -271,13 +294,7 @@ void eho() {
   ledfeedback ();
 }
 
-void power(){
-  relControl.pimp ();
-  //relControl.turbine1 ();
-  relControl.flo ();
-  relControl.ionn ();
-  eho();
-}
+
 
 void receivedCallback( uint32_t from, String &msg ) {
   combiboxi.watLBox(msg);
@@ -319,7 +336,7 @@ void receivedCallback( uint32_t from, String &msg ) {
     relControl.ionn ();
    }
   if (msg.equals("echo_turb")) { eho(); }
-  if (msg.equals("huOn")) { power(); }
+  if (msg.equals("huOn")) { relControl.power(); }
   
 }
 
@@ -345,7 +362,7 @@ void touchDetect() {
   if (touchRead(T6) < 40) {
     if (millis() - lostTime3 > delay) { 
 
-      power();
+      relControl.power();
       lostTime3 = millis();
     }
   }

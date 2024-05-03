@@ -91,8 +91,8 @@ bool flowSpin = true;
 bool ionic = true; 
 
 void pimp () {
-  if (pomp_State) { activRelay(2);
-  } else { deactivRelay(2);
+  if (pomp_State) { activRelay(2); digitalWrite(5, HIGH);
+  } else { deactivRelay(2); digitalWrite(5, LOW);
   }
   pomp_State = !pomp_State;
 }
@@ -110,30 +110,49 @@ void fan () {
       deactivRelay(5);
       deactivRelay(4);
       deactivRelay(3);
+
+      digitalWrite(15, LOW);
+      digitalWrite(2, LOW);
+      digitalWrite(4, LOW);
       break;
     case TURBO1:
       deactivRelay(4);
       deactivRelay(3);
 
+      digitalWrite(2, LOW);
+      digitalWrite(4, LOW);
+
       activRelay(5);
+
+      digitalWrite(15, HIGH);
       break;
     case TURBO2:
       deactivRelay(5);
       deactivRelay(3);
 
+      digitalWrite(4, LOW);
+      digitalWrite(15, LOW);
+
       activRelay(4);
+
+      digitalWrite(2, HIGH);
       break;
     case TURBO3:
       deactivRelay(5);
       deactivRelay(4);
 
+      digitalWrite(2, LOW);
+      digitalWrite(15, LOW);
+
       activRelay(3);
+
+      digitalWrite(15, HIGH);
       break;
   }
 }
 void flo () {
-  if (flowSpin) { activRelay(1);
-  } else { deactivRelay(1);
+  if (flowSpin) { activRelay(1); digitalWrite(18, HIGH);
+  } else { deactivRelay(1); digitalWrite(18, LOW);
   }
   flowSpin = !flowSpin;
 }
@@ -147,6 +166,7 @@ void ionn () {
 void power(){
   
   if (tpower == false) {
+    digitalWrite(19, LOW);
     deactivRelay(2);
     deactivRelay(1);
     deactivRelay(0);
@@ -155,6 +175,7 @@ void power(){
     tpower = true;
     eho();
   } else {
+    digitalWrite(19, HIGH);
     activRelay(2);
     activRelay(1);
     activRelay(0);
@@ -406,6 +427,13 @@ unsigned long lostTime6 = 0;
 
 void setup() {
   Serial.begin(115200);
+
+  pinMode(19, OUTPUT);   //повер
+  pinMode(18, OUTPUT);   //поворот
+  pinMode(5, OUTPUT);    //помпа
+  pinMode(4, OUTPUT);    //турбо високий
+  pinMode(2, OUTPUT);    //турбо середній
+  pinMode(15, OUTPUT);   //турбо низький
 
   Wire.begin(21, 22);
 

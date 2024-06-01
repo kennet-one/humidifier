@@ -72,15 +72,71 @@ void stateWled (){
 class RelayControl {
 public:
 void activRelay(int y) {
-  byte x = rdRelayBlock();
-  x &= ~(1 << y);
-  wrRelayBlock(x);
+  byte x = rdRelayBlock();  // Зчитуємо поточний стан блоку реле
+  
+  switch (y) {
+    case 0:
+      x &= 0xFE;  // Змінюємо тільки перший біт (00000001 -> 11111110)
+      break;
+    case 1:
+      x &= 0xFD;  // Змінюємо тільки другий біт (00000010 -> 11111101)
+      break;
+    case 2:
+      x &= 0xFB;  // Змінюємо тільки третій біт (00000100 -> 11111011)
+      break;
+    case 3:
+      x &= 0xF7;  // Змінюємо тільки четвертий біт (00001000 -> 11110111)
+      break;
+    case 4:
+      x &= 0xEF;  // Змінюємо тільки п'ятий біт (00010000 -> 11101111)
+      break;
+    case 5:
+      x &= 0xDF;  // Змінюємо тільки шостий біт (00100000 -> 11011111)
+      break;
+    case 6:
+      x &= 0xBF;  // Змінюємо тільки сьомий біт (01000000 -> 10111111)
+      break;
+    case 7:
+      x &= 0x7F;  // Змінюємо тільки восьмий біт (10000000 -> 01111111)
+      break;
+  }
+  
+  wrRelayBlock(x);  // Записуємо оновлений стан назад у блок реле
 }
+
 void deactivRelay(int y) {
-  byte x = rdRelayBlock();
-  x |= (1 << y);
-  wrRelayBlock(x);
+  byte x = rdRelayBlock();  // Зчитуємо поточний стан блоку реле
+  
+  switch (y) {
+    case 0:
+      x |= 0x01;  // Встановлюємо перший біт (00000001)
+      break;
+    case 1:
+      x |= 0x02;  // Встановлюємо другий біт (00000010)
+      break;
+    case 2:
+      x |= 0x04;  // Встановлюємо третій біт (00000100)
+      break;
+    case 3:
+      x |= 0x08;  // Встановлюємо четвертий біт (00001000)
+      break;
+    case 4:
+      x |= 0x10;  // Встановлюємо п'ятий біт (00010000)
+      break;
+    case 5:
+      x |= 0x20;  // Встановлюємо шостий біт (00100000)
+      break;
+    case 6:
+      x |= 0x40;  // Встановлюємо сьомий біт (01000000)
+      break;
+    case 7:
+      x |= 0x80;  // Встановлюємо восьмий біт (10000000)
+      break;
+  }
+  
+  wrRelayBlock(x);  // Записуємо оновлений стан назад у блок реле
 }
+
 void wrRelayBlock(byte x) {
   Wire.beginTransmission(relayBlock);
   Wire.write(x);
@@ -91,8 +147,8 @@ bool flowSpin = true;
 bool ionic = true; 
 
 void pimp () {
-  if (pomp_State) { activRelay(2); digitalWrite(5, HIGH);
-  } else { deactivRelay(2); digitalWrite(5, LOW);
+  if (pomp_State) { activRelay(0); digitalWrite(5, HIGH);
+  } else { deactivRelay(0); digitalWrite(5, LOW);
   }
   pomp_State = !pomp_State;
 }
@@ -157,8 +213,8 @@ void flo () {
   flowSpin = !flowSpin;
 }
 void ionn () {
-  if (ionic) { activRelay(0);
-  } else { deactivRelay(0);
+  if (ionic) { activRelay(2);
+  } else { deactivRelay(2);
   }
   ionic = !ionic; 
 }
@@ -184,6 +240,18 @@ void power(){
     eho();
   }
 }
+
+void printFirstSixRelaysState() {
+  byte x = rdRelayBlock();
+  for (int i = 0; i < 6; ++i) {
+    bool state = (x & (1 << i)) == 0; // true, якщо реле увімкнене (0)
+    Serial.print("Relay ");
+    Serial.print(i);
+    Serial.print(": ");
+    Serial.println(state ? "ON" : "OFF");
+    }
+  }
+
 private:
 const int relayBlock = 0x38; // Адреса PCA8574AD
 
@@ -313,6 +381,7 @@ void eho() {
   mesh.sendSingle(624409705,q);
   combiboxi.echoBri ();
   ledfeedback ();
+  relControl.printFirstSixRelaysState();
 }
 
 
@@ -364,14 +433,14 @@ void receivedCallback( uint32_t from, String &msg ) {
 class TouchMe {
 public:
 void touchDetect() {
-  if (touchRead(T7) < 40) {
-    if (millis() - lostTime1 > delay) { 
+  //if (touchRead(T7) < 40) {
+    //if (millis() - lostTime1 > delay) { 
 
-      mesh.sendSingle(624409705, "13" + (relControl.pomp_State ? String("1") : String("0")));
-      relControl.pimp ();
-      lostTime1 = millis();
-      }
-  }
+      //mesh.sendSingle(624409705, "13" + (relControl.pomp_State ? String("1") : String("0")));
+      //relControl.pimp ();
+      //lostTime1 = millis();
+      //}
+  //}
   if (touchRead(T8) < 40) {
     if (millis() - lostTime2 > delay) { 
 
@@ -453,7 +522,7 @@ void setup() {
 void loop(){
 
   relControl.fan();
-  touchMe.touchDetect();
+  //touchMe.touchDetect();
   combiboxi.combi();
   stateWled();
   pmm.pmsIn();

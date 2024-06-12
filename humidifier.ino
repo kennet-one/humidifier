@@ -151,6 +151,7 @@ void pimp () {
   } else { deactivRelay(0); digitalWrite(5, LOW);
   }
   pomp_State = !pomp_State;
+  mesh.sendSingle(624409705, "13" + (pomp_State ? String("0") : String("1")));
 }
 
 enum Tuurbo {
@@ -211,21 +212,31 @@ void flo () {
   } else { deactivRelay(1); digitalWrite(18, LOW);
   }
   flowSpin = !flowSpin;
+  mesh.sendSingle(624409705, "16" + (flowSpin ? String("0") : String("1")));
 }
 void ionn () {
   if (ionic) { activRelay(2);
   } else { deactivRelay(2);
   }
   ionic = !ionic; 
+  mesh.sendSingle(624409705, "17" + (ionic ? String("0") : String("1")));
 }
 
 void power(){
   
   if (tpower == false) {
     digitalWrite(19, LOW);
-    deactivRelay(2);
+    deactivRelay(2); 
+    ionic = true; 
+    //ionn();
     deactivRelay(1);
+    flowSpin = true;
+    digitalWrite(18, LOW);
+    //flo();
     deactivRelay(0);
+    pomp_State = true;
+    digitalWrite(5, LOW);
+    //pimp();
     x = tuurbo;
     tuurbo = TURBOOFF;
     tpower = true;
@@ -233,8 +244,16 @@ void power(){
   } else {
     digitalWrite(19, HIGH);
     activRelay(2);
+    ionic = false; 
+    //ionn();
     activRelay(1);
+    flowSpin = false;
+    digitalWrite(18, HIGH);
+    //flo ();
     activRelay(0);
+    pomp_State = false;
+    digitalWrite(5, HIGH);
+    //pimp();
     tuurbo = x;
     tpower = false;
     eho();
@@ -247,6 +266,47 @@ void printFirstSixRelaysState() {
     bool state = (x & (1 << i)) == 0; // true, якщо реле увімкнене (0)
     Serial.print("Relay ");
     Serial.print(i);
+    switch (i) {
+      case 0: 
+       Serial.print("00000");
+       Serial.print(state);
+       break;
+
+      case 1: 
+       Serial.print("11111");
+       Serial.print(state);
+       break;
+
+      case 2: 
+       Serial.print("22222");
+       Serial.print(state);
+       break;
+
+      case 3: 
+       Serial.print("33333");
+       Serial.print(state);
+       break;
+
+      case 4: 
+       Serial.print("44444");
+       Serial.print(state);
+       break;
+
+      case 5: 
+       Serial.print("55555");
+       Serial.print(state);
+       break;
+
+      case 6: 
+       Serial.print("666666");
+       Serial.print(state);
+       break;
+
+      case 7: 
+       Serial.print("77777");
+       Serial.print(state);
+       break;
+    }
     Serial.print(": ");
     Serial.println(state ? "ON" : "OFF");
     }
@@ -396,8 +456,9 @@ void receivedCallback( uint32_t from, String &msg ) {
     pmm.state = Pmm::WAKE;
    }
   if (msg.equals("pomp")) { 
-    mesh.sendSingle(624409705, "13" + (relControl.pomp_State ? String("1") : String("0")));
-    relControl.pimp ();
+
+    relControl.pimp ();    
+    //mesh.sendSingle(624409705, "13" + (relControl.pomp_State ? String("1") : String("0")));
    }
   if (msg.equals("140")) { 
     relControl.tuurbo = RelayControl::TURBOOFF;
@@ -417,13 +478,13 @@ void receivedCallback( uint32_t from, String &msg ) {
    }
   if (msg.equals("flow")) { 
 
-    mesh.sendSingle(624409705, "16" + (relControl.flowSpin ? String("1") : String("0")));
     relControl.flo ();
+    //mesh.sendSingle(624409705, "16" + (relControl.flowSpin ? String("1") : String("0")));
    }
   if (msg.equals("ion")) { 
 
-    mesh.sendSingle(624409705, "17" + (relControl.ionic ? String("1") : String("0")));
     relControl.ionn ();
+    //mesh.sendSingle(624409705, "17" + (relControl.ionic ? String("1") : String("0")));
    }
   if (msg.equals("echo_turb")) { eho(); }
   if (msg.equals("huOn")) { relControl.power(); }

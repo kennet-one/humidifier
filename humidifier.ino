@@ -147,8 +147,8 @@ bool flowSpin = true;
 bool ionic = true; 
 
 void pimp () {
-  if (pomp_State) { activRelay(0); digitalWrite(5, HIGH);
-  } else { deactivRelay(0); digitalWrite(5, LOW);
+  if (pomp_State) { activRelay(0); 
+  } else { deactivRelay(0); 
   }
   pomp_State = !pomp_State;
   mesh.sendSingle(624409705, "13" + (pomp_State ? String("0") : String("1")));
@@ -168,48 +168,36 @@ void fan () {
       deactivRelay(4);
       deactivRelay(3);
 
-      digitalWrite(15, LOW);
-      digitalWrite(2, LOW);
-      digitalWrite(4, LOW);
       break;
     case TURBO1:
       deactivRelay(4);
       deactivRelay(3);
 
-      digitalWrite(2, LOW);
-      digitalWrite(4, LOW);
 
       activRelay(5);
 
-      digitalWrite(15, HIGH);
       break;
     case TURBO2:
       deactivRelay(5);
       deactivRelay(3);
 
-      digitalWrite(4, LOW);
-      digitalWrite(15, LOW);
 
       activRelay(4);
 
-      digitalWrite(2, HIGH);
       break;
     case TURBO3:
       deactivRelay(5);
       deactivRelay(4);
 
-      digitalWrite(2, LOW);
-      digitalWrite(15, LOW);
 
       activRelay(3);
 
-      digitalWrite(15, HIGH);
       break;
   }
 }
 void flo () {
-  if (flowSpin) { activRelay(1); digitalWrite(18, HIGH);
-  } else { deactivRelay(1); digitalWrite(18, LOW);
+  if (flowSpin) { activRelay(1);
+  } else { deactivRelay(1);
   }
   flowSpin = !flowSpin;
   mesh.sendSingle(624409705, "16" + (flowSpin ? String("0") : String("1")));
@@ -225,34 +213,28 @@ void ionn () {
 void power(){
   
   if (tpower == false) {
-    digitalWrite(19, LOW);
     deactivRelay(2); 
     ionic = true; 
     //ionn();
     deactivRelay(1);
     flowSpin = true;
-    digitalWrite(18, LOW);
     //flo();
     deactivRelay(0);
     pomp_State = true;
-    digitalWrite(5, LOW);
     //pimp();
     x = tuurbo;
     tuurbo = TURBOOFF;
     tpower = true;
     eho();
   } else {
-    digitalWrite(19, HIGH);
     activRelay(2);
     ionic = false; 
     //ionn();
     activRelay(1);
     flowSpin = false;
-    digitalWrite(18, HIGH);
     //flo ();
     activRelay(0);
     pomp_State = false;
-    digitalWrite(5, HIGH);
     //pimp();
     tuurbo = x;
     tpower = false;
@@ -557,13 +539,6 @@ unsigned long lostTime6 = 0;
 
 void setup() {
   Serial.begin(115200);
-
-  pinMode(19, OUTPUT);   //повер
-  pinMode(18, OUTPUT);   //поворот
-  pinMode(5, OUTPUT);    //помпа
-  pinMode(4, OUTPUT);    //турбо високий
-  pinMode(2, OUTPUT);    //турбо середній
-  pinMode(15, OUTPUT);   //турбо низький
 
   Wire.begin(21, 22);
 

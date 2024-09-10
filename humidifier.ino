@@ -3,6 +3,7 @@
 #include "painlessMesh.h"
 #include "Wire.h"
 #include "FastLED.h"
+#include <Adafruit_AW9523.h>
 
 #define   MESH_PREFIX     "kennet"
 #define   MESH_PASSWORD   "kennet123"
@@ -10,11 +11,20 @@
 
 painlessMesh  mesh;
 
+Adafruit_AW9523 aw;
+
 CRGB waterLed[1];
 
 HardwareSerial pmsSerial(1); // UART1
 
 PMS pms(pmsSerial);
+
+uint8_t L0 = 0;  // 0 thru 15
+uint8_t L1 = 1;  
+uint8_t L2 = 2;  
+uint8_t L3 = 3;  
+uint8_t L4 = 4;  
+uint8_t L5 = 5;  
 
 enum WLed {
   BLED,
@@ -308,7 +318,7 @@ byte rdRelayBlock() {
 }
 } relControl;
 
-class Pmm {
+class Pmm {        //мкг/м3
 public:
   Pmm() : lastReadTime(0), lastWakeTime(0), lastRequestTime(0), state(SLEEP),
             readInterval(30000), wakeInterval(60000), waitTime(1000) {}
@@ -553,9 +563,41 @@ void setup() {
 
   mesh.init( MESH_PREFIX, MESH_PASSWORD, MESH_PORT );
   mesh.onReceive(&receivedCallback);
+
+  aw.pinMode(L0, OUTPUT);
+  aw.pinMode(L1, OUTPUT);
+  aw.pinMode(L2, OUTPUT);
+  aw.pinMode(L3, OUTPUT);
+  aw.pinMode(L4, OUTPUT);
+  aw.pinMode(L5, OUTPUT);
 }
 
 void loop(){
+
+  aw.digitalWrite(L0, HIGH);
+  delay(100);
+  aw.digitalWrite(L0, LOW);
+  delay(100);
+  aw.digitalWrite(L1, HIGH);
+  delay(100);
+  aw.digitalWrite(L1, LOW);
+  delay(100);
+  aw.digitalWrite(L2, HIGH);
+  delay(100);
+  aw.digitalWrite(L2, LOW);
+  delay(100);
+  aw.digitalWrite(L3, HIGH);
+  delay(100);
+  aw.digitalWrite(L3, LOW);
+  delay(100);
+  aw.digitalWrite(L4, HIGH);
+  delay(100);
+  aw.digitalWrite(L4, LOW);
+  delay(100);
+  aw.digitalWrite(L5, HIGH);
+  delay(100);
+  aw.digitalWrite(L5, LOW);
+  delay(100);
 
   relControl.fan();
   //touchMe.touchDetect();

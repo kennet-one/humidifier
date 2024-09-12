@@ -9,6 +9,7 @@
 #define   MESH_PASSWORD   "kennet123"
 #define   MESH_PORT       5555
 
+Scheduler userScheduler;
 painlessMesh  mesh;
 
 Adafruit_AW9523 aw;
@@ -561,7 +562,7 @@ void setup() {
   pmsSerial.begin(9600, SERIAL_8N1, 16, 17); // Налаштування UART для PMS
   pms.passiveMode();   
 
-  mesh.init( MESH_PREFIX, MESH_PASSWORD, MESH_PORT );
+  mesh.init( MESH_PREFIX, MESH_PASSWORD, &userScheduler, MESH_PORT );
   mesh.onReceive(&receivedCallback);
 
   aw.pinMode(L0, OUTPUT);

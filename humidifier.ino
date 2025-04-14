@@ -1,7 +1,6 @@
 // сенсорний датчик того шо вода кіньчилася
 // сенсор уровня 50 і 100 процент води
 // почистити код від мусора
-// проблема з помпою, мені кажеця шо якшо підключити помпу до 12в лінії то баг пройде
 #include "HardwareSerial.h"
 #include "PMS.h"
 #include "painlessMesh.h"
@@ -179,31 +178,24 @@ void fan () {
       deactivRelay(5);
       deactivRelay(4);
       deactivRelay(3);
-
       break;
     case TURBO1:
       deactivRelay(4);
       deactivRelay(3);
 
-
       activRelay(5);
-
       break;
     case TURBO2:
       deactivRelay(5);
       deactivRelay(3);
 
-
       activRelay(4);
-
       break;
     case TURBO3:
       deactivRelay(5);
       deactivRelay(4);
 
-
       activRelay(3);
-
       break;
   }
 }
@@ -223,7 +215,6 @@ void ionn () {
 }
 
 void power(){
-  
   if (tpower == false) {
     deactivRelay(2); 
     ionic = true; 
@@ -253,58 +244,6 @@ void power(){
     eho();
   }
 }
-
-void printFirstSixRelaysState() {
-  byte x = rdRelayBlock();
-  for (int i = 0; i < 6; ++i) {
-    bool state = (x & (1 << i)) == 0; // true, якщо реле увімкнене (0)
-    Serial.print("Relay ");
-    Serial.print(i);
-    switch (i) {
-      case 0: 
-       Serial.print("00000");
-       Serial.print(state);
-       break;
-
-      case 1: 
-       Serial.print("11111");
-       Serial.print(state);
-       break;
-
-      case 2: 
-       Serial.print("22222");
-       Serial.print(state);
-       break;
-
-      case 3: 
-       Serial.print("33333");
-       Serial.print(state);
-       break;
-
-      case 4: 
-       Serial.print("44444");
-       Serial.print(state);
-       break;
-
-      case 5: 
-       Serial.print("55555");
-       Serial.print(state);
-       break;
-
-      case 6: 
-       Serial.print("666666");
-       Serial.print(state);
-       break;
-
-      case 7: 
-       Serial.print("77777");
-       Serial.print(state);
-       break;
-    }
-    Serial.print(": ");
-    Serial.println(state ? "ON" : "OFF");
-    }
-  }
 
 private:
 const int relayBlock = 0x38; // Адреса PCA8574AD
@@ -354,7 +293,6 @@ public:
     case READ:
       if (currentMillis - lastRequestTime >= waitTime) {
         if (pms.readUntil(data)) {
-
           String x = "10"+ String(data.PM_AE_UG_1_0);
           mesh.sendSingle(624409705,x);
 
@@ -382,11 +320,8 @@ private:
   unsigned long lastWakeTime;
   unsigned long lastRequestTime;
   PMS::DATA data;
-  
 };
 Pmm pmm;
-
-
 
 class Combiboxi {
   public:
@@ -435,10 +370,7 @@ void eho() {
   mesh.sendSingle(624409705,q);
   combiboxi.echoBri ();
   ledfeedback ();
-  relControl.printFirstSixRelaysState();
 }
-
-
 
 void receivedCallback( uint32_t from, String &msg ) {
   combiboxi.watLBox(msg);
@@ -450,9 +382,7 @@ void receivedCallback( uint32_t from, String &msg ) {
     pmm.state = Pmm::WAKE;
    }
   if (msg.equals("pomp")) { 
-
     relControl.pimp ();    
-    //mesh.sendSingle(624409705, "13" + (relControl.pomp_State ? String("1") : String("0")));
    }
   if (msg.equals("140")) { 
     relControl.tuurbo = RelayControl::TURBOOFF;
@@ -471,34 +401,20 @@ void receivedCallback( uint32_t from, String &msg ) {
     mesh.sendSingle(624409705, "143");
    }
   if (msg.equals("flow")) { 
-
     relControl.flo ();
-    //mesh.sendSingle(624409705, "16" + (relControl.flowSpin ? String("1") : String("0")));
    }
   if (msg.equals("ion")) { 
-
     relControl.ionn ();
-    //mesh.sendSingle(624409705, "17" + (relControl.ionic ? String("1") : String("0")));
    }
   if (msg.equals("echo_turb")) { eho(); }
   if (msg.equals("huOn")) { relControl.power(); }
-  
 }
 
 class TouchMe {
 public:
 void touchDetect() {
-  //if (touchRead(T7) < 40) {
-    //if (millis() - lostTime1 > delay) { 
-
-      //mesh.sendSingle(624409705, "13" + (relControl.pomp_State ? String("1") : String("0")));
-      //relControl.pimp ();
-      //lostTime1 = millis();
-      //}
-  //}
   if (touchRead(T8) < 40) {
     if (millis() - lostTime2 > delay) { 
-
       mesh.sendSingle(624409705, "17" + (relControl.ionic ? String("1") : String("0")));
       relControl.ionn ();
       lostTime2 = millis();
@@ -506,14 +422,12 @@ void touchDetect() {
   }
   if (touchRead(T6) < 40) {
     if (millis() - lostTime3 > delay) { 
-
       relControl.power();
       lostTime3 = millis();
     }
   }
   if (touchRead(T5) < 40) {
     if (millis() - lostTime4 > delay) { 
-
       mesh.sendSingle(624409705, "16" + (relControl.flowSpin ? String("1") : String("0")));
       relControl.flo ();
       
@@ -522,10 +436,8 @@ void touchDetect() {
   }
   if (touchRead(T4) < 40) {
     if (millis() - lostTime5 > delay) { 
-
       //mesh.sendSingle(624409705, "14" + (relControl.turbo_State ? String("1") : String("0")));
       //relControl.turbine1 ();
-      
       lostTime5 = millis();
     }
   }
@@ -548,14 +460,12 @@ unsigned long lostTime5 = 0;
 unsigned long lostTime6 = 0;
 }touchMe;
 
-
 void setup() {
   Serial.begin(115200);
 
   Wire.begin(21, 22);
 
   FastLED.addLeds<WS2811, 25, BRG>(waterLed, 1);
-  
   FastLED.setBrightness(50);
 
   relControl.wrRelayBlock(0xFF);    //всі піни у стан (HIGH) 

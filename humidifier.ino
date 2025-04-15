@@ -111,7 +111,6 @@ void activRelay(int y) {
       x &= 0x7F;  // Змінюємо тільки восьмий біт (10000000 -> 01111111)
       break;
   }
-  
   wrRelayBlock(x);  // Записуємо оновлений стан назад у блок реле
 }
 
@@ -144,7 +143,6 @@ void deactivRelay(int y) {
       x |= 0x80;  // Встановлюємо восьмий біт (10000000)
       break;
   }
-  
   wrRelayBlock(x);  // Записуємо оновлений стан назад у блок реле
 }
 
@@ -485,31 +483,6 @@ void setup() {
 }
 
 void loop(){
-
-  aw.digitalWrite(L0, HIGH);
-  delay(100);
-  aw.digitalWrite(L0, LOW);
-  delay(100);
-  aw.digitalWrite(L1, HIGH);
-  delay(100);
-  aw.digitalWrite(L1, LOW);
-  delay(100);
-  aw.digitalWrite(L2, HIGH);
-  delay(100);
-  aw.digitalWrite(L2, LOW);
-  delay(100);
-  aw.digitalWrite(L3, HIGH);
-  delay(100);
-  aw.digitalWrite(L3, LOW);
-  delay(100);
-  aw.digitalWrite(L4, HIGH);
-  delay(100);
-  aw.digitalWrite(L4, LOW);
-  delay(100);
-  aw.digitalWrite(L5, HIGH);
-  delay(100);
-  aw.digitalWrite(L5, LOW);
-  delay(100);
 
   relControl.fan();
   //touchMe.touchDetect();

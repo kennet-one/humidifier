@@ -1,6 +1,6 @@
 // сенсорний датчик того шо вода кіньчилася
 // сенсор уровня 50 і 100 процент води
-// почистити код від мусора
+// Node ID: 2661345693
 #include "HardwareSerial.h"
 #include "PMS.h"
 #include "painlessMesh.h"
@@ -42,16 +42,16 @@ void ledfeedback () {
   WLed ledf = getWLed();
   switch (ledf) {
     case BLED:
-      mesh.sendSingle(624409705,"210");
+      mesh.sendBroadcast("210");
       break;
     case RLED:
-      mesh.sendSingle(624409705,"211");
+      mesh.sendBroadcast("211");
       break;
     case GLED:
-      mesh.sendSingle(624409705,"212");
+      mesh.sendBroadcast("212");
       break;
     case WLED:
-      mesh.sendSingle(624409705,"213");
+      mesh.sendBroadcast("213");
       break;
   }
 }
@@ -160,7 +160,7 @@ void pimp () {
   } else { deactivRelay(0); 
   }
   pomp_State = !pomp_State;
-  mesh.sendSingle(624409705, "13" + (pomp_State ? String("0") : String("1")));
+  mesh.sendBroadcast( "13" + (pomp_State ? String("0") : String("1")));
 }
 
 enum Tuurbo {
@@ -202,14 +202,14 @@ void flo () {
   } else { deactivRelay(1);
   }
   flowSpin = !flowSpin;
-  mesh.sendSingle(624409705, "16" + (flowSpin ? String("0") : String("1")));
+  mesh.sendBroadcast( "16" + (flowSpin ? String("0") : String("1")));
 }
 void ionn () {
   if (ionic) { activRelay(2);
   } else { deactivRelay(2);
   }
   ionic = !ionic; 
-  mesh.sendSingle(624409705, "17" + (ionic ? String("0") : String("1")));
+  mesh.sendBroadcast( "17" + (ionic ? String("0") : String("1")));
 }
 
 void power(){
@@ -292,13 +292,13 @@ public:
       if (currentMillis - lastRequestTime >= waitTime) {
         if (pms.readUntil(data)) {
           String x = "10"+ String(data.PM_AE_UG_1_0);
-          mesh.sendSingle(624409705,x);
+          mesh.sendBroadcast(x);
 
           String y = "11"+ String(data.PM_AE_UG_2_5);
-          mesh.sendSingle(624409705,y);
+          mesh.sendBroadcast(y);
 
           String w = "12"+ String(data.PM_AE_UG_10_0);
-          mesh.sendSingle(624409705,w);
+          mesh.sendBroadcast(w);
         }
 
         pms.sleep();
@@ -325,7 +325,7 @@ class Combiboxi {
   public:
   void echoBri(){
     String briEcho = "20" + String(brightness);
-    mesh.sendSingle(624409705,briEcho);
+    mesh.sendBroadcast(briEcho);
   }
   void watLBox(String msg) {
     if (msg.substring(0, 2) == "19") {
@@ -347,10 +347,10 @@ class Combiboxi {
 
   void watMod(String msg) {
     if (msg.substring(0, 2) == "18") {
-      if (msg.endsWith(String("0"))) { wLed = BLED;  mesh.sendSingle(624409705,"210");
-      } else if (msg.endsWith(String("1"))) { wLed = RLED;  mesh.sendSingle(624409705,"211");
-      } else if (msg.endsWith(String("2"))) { wLed = GLED;  mesh.sendSingle(624409705,"212");
-      } else if (msg.endsWith(String("3"))) { wLed = WLED;  mesh.sendSingle(624409705,"213");
+      if (msg.endsWith(String("0"))) { wLed = BLED;  mesh.sendBroadcast("210");
+      } else if (msg.endsWith(String("1"))) { wLed = RLED;  mesh.sendBroadcast("211");
+      } else if (msg.endsWith(String("2"))) { wLed = GLED;  mesh.sendBroadcast("212");
+      } else if (msg.endsWith(String("3"))) { wLed = WLED;  mesh.sendBroadcast("213");
       }
     }
   }
@@ -365,7 +365,7 @@ void eho() {
   String u = (relControl.flowSpin == true) ? "1" : "0";
   String i = (relControl.ionic == true) ? "1" : "0";
   String q = "15" + x + y + u + i;
-  mesh.sendSingle(624409705,q);
+  mesh.sendBroadcast(q);
   combiboxi.echoBri ();
   ledfeedback ();
 }
@@ -376,7 +376,7 @@ void receivedCallback( uint32_t from, String &msg ) {
 
   if (msg.equals("pm1")) { 
     String x = ("pm155555555555555"); 
-    mesh.sendSingle(624409705,x);
+    mesh.sendBroadcast(x);
     pmm.state = Pmm::WAKE;
    }
   if (msg.equals("pomp")) { 
@@ -384,19 +384,19 @@ void receivedCallback( uint32_t from, String &msg ) {
    }
   if (msg.equals("140")) { 
     relControl.tuurbo = RelayControl::TURBOOFF;
-    mesh.sendSingle(624409705, "140");
+    mesh.sendBroadcast( "140");
    }
   if (msg.equals("141")) { 
     relControl.tuurbo = RelayControl::TURBO1;
-    mesh.sendSingle(624409705, "141");
+    mesh.sendBroadcast( "141");
    }
   if (msg.equals("142")) { 
     relControl.tuurbo = RelayControl::TURBO2;
-    mesh.sendSingle(624409705, "142");
+    mesh.sendBroadcast( "142");
    }
   if (msg.equals("143")) { 
     relControl.tuurbo = RelayControl::TURBO3;
-    mesh.sendSingle(624409705, "143");
+    mesh.sendBroadcast( "143");
    }
   if (msg.equals("flow")) { 
     relControl.flo ();
@@ -413,7 +413,7 @@ public:
 void touchDetect() {
   if (touchRead(T8) < 40) {
     if (millis() - lostTime2 > delay) { 
-      mesh.sendSingle(624409705, "17" + (relControl.ionic ? String("1") : String("0")));
+      mesh.sendBroadcast( "17" + (relControl.ionic ? String("1") : String("0")));
       relControl.ionn ();
       lostTime2 = millis();
       }
@@ -426,7 +426,7 @@ void touchDetect() {
   }
   if (touchRead(T5) < 40) {
     if (millis() - lostTime4 > delay) { 
-      mesh.sendSingle(624409705, "16" + (relControl.flowSpin ? String("1") : String("0")));
+      mesh.sendBroadcast( "16" + (relControl.flowSpin ? String("1") : String("0")));
       relControl.flo ();
       
       lostTime4 = millis();
@@ -490,5 +490,4 @@ void loop(){
   stateWled();
   pmm.pmsIn();
   mesh.update();
-
 }

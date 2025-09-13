@@ -8,9 +8,9 @@
 #include "FastLED.h"
 #include <Adafruit_AW9523.h>
 #include "mash_parameter.h"
+#include "CRCMASH.h"
 
 Scheduler userScheduler;
-painlessMesh  mesh;
 
 Adafruit_AW9523 aw;
 
@@ -42,16 +42,16 @@ void ledfeedback () {
   WLed ledf = getWLed();
   switch (ledf) {
     case BLED:
-      mesh.sendBroadcast("210");
+      sendB("210");
       break;
     case RLED:
-      mesh.sendBroadcast("211");
+      sendB("211");
       break;
     case GLED:
-      mesh.sendBroadcast("212");
+      sendB("212");
       break;
     case WLED:
-      mesh.sendBroadcast("213");
+      sendB("213");
       break;
   }
 }
@@ -160,7 +160,7 @@ void pimp () {
   } else { deactivRelay(0); 
   }
   pomp_State = !pomp_State;
-  mesh.sendBroadcast( "13" + (pomp_State ? String("0") : String("1")));
+  sendB( "13" + (pomp_State ? String("0") : String("1")));
 }
 
 enum Tuurbo {
@@ -202,14 +202,14 @@ void flo () {
   } else { deactivRelay(1);
   }
   flowSpin = !flowSpin;
-  mesh.sendBroadcast( "16" + (flowSpin ? String("0") : String("1")));
+  sendB( "16" + (flowSpin ? String("0") : String("1")));
 }
 void ionn () {
   if (ionic) { activRelay(2);
   } else { deactivRelay(2);
   }
   ionic = !ionic; 
-  mesh.sendBroadcast( "17" + (ionic ? String("0") : String("1")));
+  sendB( "17" + (ionic ? String("0") : String("1")));
 }
 
 void power(){
@@ -292,13 +292,13 @@ public:
       if (currentMillis - lastRequestTime >= waitTime) {
         if (pms.readUntil(data)) {
           String x = "10"+ String(data.PM_AE_UG_1_0);
-          mesh.sendBroadcast(x);
+          sendB(x);
 
           String y = "11"+ String(data.PM_AE_UG_2_5);
-          mesh.sendBroadcast(y);
+          sendB(y);
 
           String w = "12"+ String(data.PM_AE_UG_10_0);
-          mesh.sendBroadcast(w);
+          sendB(w);
         }
 
         pms.sleep();
@@ -325,7 +325,7 @@ class Combiboxi {
   public:
   void echoBri(){
     String briEcho = "20" + String(brightness);
-    mesh.sendBroadcast(briEcho);
+    sendB(briEcho);
   }
   void watLBox(String msg) {
     if (msg.substring(0, 2) == "19") {
@@ -347,10 +347,10 @@ class Combiboxi {
 
   void watMod(String msg) {
     if (msg.substring(0, 2) == "18") {
-      if (msg.endsWith(String("0"))) { wLed = BLED;  mesh.sendBroadcast("210");
-      } else if (msg.endsWith(String("1"))) { wLed = RLED;  mesh.sendBroadcast("211");
-      } else if (msg.endsWith(String("2"))) { wLed = GLED;  mesh.sendBroadcast("212");
-      } else if (msg.endsWith(String("3"))) { wLed = WLED;  mesh.sendBroadcast("213");
+      if (msg.endsWith(String("0"))) { wLed = BLED;  sendB("210");
+      } else if (msg.endsWith(String("1"))) { wLed = RLED;  sendB("211");
+      } else if (msg.endsWith(String("2"))) { wLed = GLED;  sendB("212");
+      } else if (msg.endsWith(String("3"))) { wLed = WLED;  sendB("213");
       }
     }
   }
@@ -365,18 +365,18 @@ void eho() {
   String u = (relControl.flowSpin == true) ? "1" : "0";
   String i = (relControl.ionic == true) ? "1" : "0";
   String q = "15" + x + y + u + i;
-  mesh.sendBroadcast(q);
+  sendB(q);
   combiboxi.echoBri ();
   ledfeedback ();
 }
 
-void receivedCallback( uint32_t from, String &msg ) {
+void handleBody( const String &msg ) {
   combiboxi.watLBox(msg);
   combiboxi.watMod(msg);
 
   if (msg.equals("pm1")) { 
     String x = ("pm155555555555555"); 
-    mesh.sendBroadcast(x);
+    sendB(x);
     pmm.state = Pmm::WAKE;
    }
   if (msg.equals("pomp")) { 
@@ -384,19 +384,19 @@ void receivedCallback( uint32_t from, String &msg ) {
    }
   if (msg.equals("140")) { 
     relControl.tuurbo = RelayControl::TURBOOFF;
-    mesh.sendBroadcast( "140");
+    sendB( "140");
    }
   if (msg.equals("141")) { 
     relControl.tuurbo = RelayControl::TURBO1;
-    mesh.sendBroadcast( "141");
+    sendB( "141");
    }
   if (msg.equals("142")) { 
     relControl.tuurbo = RelayControl::TURBO2;
-    mesh.sendBroadcast( "142");
+    sendB( "142");
    }
   if (msg.equals("143")) { 
     relControl.tuurbo = RelayControl::TURBO3;
-    mesh.sendBroadcast( "143");
+    sendB( "143");
    }
   if (msg.equals("flow")) { 
     relControl.flo ();
@@ -413,7 +413,7 @@ public:
 void touchDetect() {
   if (touchRead(T8) < 40) {
     if (millis() - lostTime2 > delay) { 
-      mesh.sendBroadcast( "17" + (relControl.ionic ? String("1") : String("0")));
+      sendB( "17" + (relControl.ionic ? String("1") : String("0")));
       relControl.ionn ();
       lostTime2 = millis();
       }
@@ -426,7 +426,7 @@ void touchDetect() {
   }
   if (touchRead(T5) < 40) {
     if (millis() - lostTime4 > delay) { 
-      mesh.sendBroadcast( "16" + (relControl.flowSpin ? String("1") : String("0")));
+      sendB( "16" + (relControl.flowSpin ? String("1") : String("0")));
       relControl.flo ();
       
       lostTime4 = millis();
@@ -471,7 +471,7 @@ void setup() {
   pmsSerial.begin(9600, SERIAL_8N1, 16, 17); // Налаштування UART для PMS
   pms.passiveMode();   
 
-  mesh.init( MESH_PREFIX, MESH_PASSWORD, &userScheduler, MESH_PORT );
+  mesh.init( MESH_PREFIX, MESH_PASSWORD, MESH_PORT );
   mesh.onReceive(&receivedCallback);
 
   aw.pinMode(L0, OUTPUT);
@@ -489,5 +489,7 @@ void loop(){
   combiboxi.combi();
   stateWled();
   pmm.pmsIn();
+  // === CRCMASH queue processing ===
+  for (uint8_t _i=0; _i<4; ++_i){ String _b; if (!qPop(_b)) break; handleBody(_b); }
   mesh.update();
 }

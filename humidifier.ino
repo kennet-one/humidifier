@@ -22,6 +22,10 @@ HardwareSerial pmsSerial(1); // UART1
 
 PMS pms(pmsSerial);
 
+unsigned long previousMillis = 0;
+const long interval = 15000; 
+bool messageSent = false;  // Прапорець для відстеження відправки повідомлення
+
 uint8_t L0 = 0;  // 0 thru 15
 uint8_t L1 = 1;  
 uint8_t L2 = 2;  
@@ -477,6 +481,7 @@ void setup() {
 
   mesh.init(MESH_PREFIX, MESH_PASSWORD, &userScheduler, MESH_PORT);
   mesh.onReceive(&receivedCallback);
+  previousMillis = millis();
 
   aw.pinMode(L0, OUTPUT);
   aw.pinMode(L1, OUTPUT);
@@ -493,6 +498,16 @@ void loop(){
   combiboxi.combi();
   stateWled();
   pmm.pmsIn();
+
+  if (!messageSent) { // Перевіряємо, чи повідомлення ще не було відправлено
+    unsigned long currentMillis = millis();
+
+    if (currentMillis - previousMillis >= interval) {
+      eho();
+      // Встановлюємо прапорець, щоб більше не відправляти повідомлення
+      messageSent = true;
+    }
+  }
   // === CRCMASH queue processing ===
   for (uint8_t _i=0; _i<4; ++_i){ String _b; if (!qPop(_b)) break; handleBody(_b); }
   mesh.update();

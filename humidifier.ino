@@ -1,6 +1,7 @@
 // сенсорний датчик того шо вода кіньчилася
 // сенсор уровня 50 і 100 процент води
 // Node ID: 2661345693
+#include <Arduino.h>
 #include "HardwareSerial.h"
 #include "PMS.h"
 #include "painlessMesh.h"
@@ -8,9 +9,10 @@
 #include "FastLED.h"
 #include <Adafruit_AW9523.h>
 #include "mash_parameter.h"
-#include "CRCMASH.h"
+#include "CRC.h"
 
 Scheduler userScheduler;
+painlessMesh mesh;
 
 Adafruit_AW9523 aw;
 
@@ -460,6 +462,8 @@ unsigned long lostTime6 = 0;
 
 void setup() {
   Serial.begin(115200);
+  
+  WiFi.setSleep(false);
 
   Wire.begin(21, 22);
 

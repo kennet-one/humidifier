@@ -1,4 +1,1 @@
-# ESP-IDF stuff
-/build/
-sdkconfig
-sdkconfig.old
+mash_parameter.h

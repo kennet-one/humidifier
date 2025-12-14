@@ -16,6 +16,8 @@
 
 #include "legacy_proto.h"
 #include "stack_monitor.h"
+#include "humid_ctrl.h"
+
 
 /* -------------------------------------------------------------------------- */
 /*  Константи / глобальні змінні                                              */
@@ -148,6 +150,7 @@ static esp_err_t mesh_comm_start(void)
 		started = true;
 		xTaskCreate(mesh_rx_task, "mesh_rx", 4096, NULL, 5, NULL);
         stack_monitor_start(3);
+		humid_ctrl_init();
 	}
 	return ESP_OK;
 }

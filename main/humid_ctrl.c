@@ -7,6 +7,7 @@
 
 #include "relay_block_pca8574.h"
 #include "legacy_root_sender.h"
+#include "water_led.h"
 
 static const char *TAG = "humid_ctrl";
 
@@ -41,6 +42,7 @@ static void send_eho(void)
 
 	legacy_send_to_root(msg);
 	ESP_LOGI(TAG, "EHO -> %s", msg);
+	water_led_echo_all();
 
 	// Phase B: brightness + ledfeedback можна додати сюди пізніше
 }

@@ -13,11 +13,15 @@
 #include "esp_mesh_internal.h"
 #include "esp_netif.h"
 #include "nvs_flash.h"
+#include "led_strip.h"
 
 #include "legacy_proto.h"
 #include "stack_monitor.h"
 #include "humid_ctrl.h"
 #include "legacy_root_sender.h"
+#include "water_led.h"
+
+
 
 /* -------------------------------------------------------------------------- */
 /*  Константи / глобальні змінні                                              */
@@ -152,6 +156,7 @@ static esp_err_t mesh_comm_start(void)
         stack_monitor_start(3);
 		legacy_root_sender_start(5);
 		humid_ctrl_init();
+		
 	}
 	return ESP_OK;
 }
@@ -380,6 +385,8 @@ void app_main(void)
 	ESP_ERROR_CHECK(esp_mesh_set_config(&cfg));
 
 	ESP_ERROR_CHECK(esp_mesh_start());
+
+	water_led_init();
 
 	ESP_LOGI(MESH_TAG,
 	         "mesh started, heap:%" PRId32 ", root_fixed:%d, topo:%d %s, ps:%d",

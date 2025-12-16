@@ -20,8 +20,7 @@
 #include "humid_ctrl.h"
 #include "legacy_root_sender.h"
 #include "water_led.h"
-
-
+#include "pms5003_node.h"
 
 /* -------------------------------------------------------------------------- */
 /*  Константи / глобальні змінні                                              */
@@ -156,6 +155,7 @@ static esp_err_t mesh_comm_start(void)
         stack_monitor_start(3);
 		legacy_root_sender_start(5);
 		humid_ctrl_init();
+		pms5003_start(5);
 		
 	}
 	return ESP_OK;

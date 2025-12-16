@@ -5,5 +5,6 @@ idf_component_register(SRCS "mesh_main.c"
                         "relay_block_pca8574.c"
                         "humid_ctrl.c"
                         "water_led.c"
+                        "pms5003_node.c"
                     PRIV_REQUIRES esp_wifi esp_driver_gpio esp_adc driver led_strip nvs_flash
                     INCLUDE_DIRS "." "include")

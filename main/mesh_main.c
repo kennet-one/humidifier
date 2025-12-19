@@ -21,6 +21,10 @@
 #include "legacy_root_sender.h"
 #include "water_led.h"
 #include "pms5003_node.h"
+#include "mesh_proto.h"
+#include "log_time_vprintf.h"
+#include "mesh_time_sync.h"
+
 
 /* -------------------------------------------------------------------------- */
 /*  Константи / глобальні змінні                                              */
@@ -53,20 +57,6 @@ static esp_netif_t *netif_sta       = NULL;
  *  src_mac  - MAC відправника
  *  payload  - невеликий текст (рядок з '\0' в кінці)
  */
-
-typedef struct __attribute__((packed)) {
-	uint8_t  magic;
-	uint8_t  version;
-	uint8_t  type;
-	uint8_t  reserved;
-	uint32_t counter;
-	uint8_t  src_mac[6];
-	char     payload[32];
-} mesh_packet_t;
-
-#define MESH_PKT_MAGIC   0xA5
-#define MESH_PKT_VERSION 1
-#define MESH_PKT_TYPE_TEXT 1
 
 /* -------------------------------------------------------------------------- */
 /*  Прототипи                                                                 */
@@ -115,6 +105,11 @@ static void mesh_rx_task(void *arg)
 			ESP_LOGW(MESH_TAG,
 			         "RX unknown packet from " MACSTR,
 			         MAC2STR(from.addr));
+			continue;
+		}
+
+		if (pkt.type == MESH_TIME_SYNC_TYPE_TIME) {
+			mesh_time_sync_handle_rx(&pkt, data.size);
 			continue;
 		}
 
@@ -395,6 +390,8 @@ void app_main(void)
 	         esp_mesh_get_topology(),
 	         esp_mesh_get_topology() ? "(chain)" : "(tree)",
 	         esp_mesh_is_ps_enabled());
-
+	
+	mesh_time_sync_init();
+	log_time_vprintf_start();
       
 }

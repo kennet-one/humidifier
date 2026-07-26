@@ -1,164 +1,52 @@
+// SPDX-License-Identifier: Apache-2.0
 #include "legacy_root_sender.h"
 
 #include <string.h>
 
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/queue.h"
-
-#include "esp_wifi.h"
-#include "esp_mesh.h"
 #include "esp_log.h"
+#include "esp_wifi.h"
+#include "freertos/FreeRTOS.h"
 
-// -----------------------------------------------------------------------------
-//  Локальна копія формату mesh_packet_t (має збігатися з тим, що в mesh_main.c)
-// -----------------------------------------------------------------------------
+#include "keemash_mesh_hooks.h"
+#include "keemash_mesh_node.h"
+#include "mesh_proto.h"
 
-typedef struct __attribute__((packed)) {
-	uint8_t  magic;
-	uint8_t  version;
-	uint8_t  type;
-	uint8_t  reserved;
-	uint32_t counter;
-	uint8_t  src_mac[6];
-	char     payload[32];
-} mesh_packet_t;
+static const char *TAG = "legacy_root_tx";
+static portMUX_TYPE s_counter_lock = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t s_counter;
 
-#define MESH_PKT_MAGIC        0xA5
-#define MESH_PKT_VERSION      1
-#define MESH_PKT_TYPE_TEXT    1    // той самий тип, що й "Hello N"
-
-// -----------------------------------------------------------------------------
-//  Черга
-// -----------------------------------------------------------------------------
-
-typedef struct {
-	char text[LEGACY_ROOT_MSG_MAX_LEN];
-} legacy_msg_t;
-
-static const char   *TAG    = "legacy_root_tx";
-static QueueHandle_t s_q    = NULL;
-static TaskHandle_t  s_task = NULL;
-static uint32_t      s_cnt  = 0;
-
-#define LEGACY_ROOT_QUEUE_LEN  16
-
-// -----------------------------------------------------------------------------
-//  Таска, яка реально шле на root
-// -----------------------------------------------------------------------------
-
-static void legacy_root_sender_task(void *arg)
+void legacy_root_sender_start(UBaseType_t task_priority)
 {
-	mesh_data_t   data;
-	mesh_addr_t   dest;
-	mesh_packet_t pkt;
-	esp_err_t     err;
-
-	data.data  = (uint8_t *)&pkt;
-	data.proto = MESH_PROTO_BIN;
-	data.tos   = MESH_TOS_P2P;
-
-	// 00:00:00:00:00:00 -> root
-	memset(&dest, 0, sizeof(dest));
-
-	while (1) {
-		legacy_msg_t msg;
-
-		if (xQueueReceive(s_q, &msg, portMAX_DELAY) != pdTRUE) {
-			continue;
-		}
-
-		// Збираємо mesh_packet
-		memset(&pkt, 0, sizeof(pkt));
-		pkt.magic   = MESH_PKT_MAGIC;
-		pkt.version = MESH_PKT_VERSION;
-		pkt.type    = MESH_PKT_TYPE_TEXT;
-		pkt.counter = ++s_cnt;
-
-		esp_wifi_get_mac(WIFI_IF_STA, pkt.src_mac);
-		strncpy(pkt.payload, msg.text, sizeof(pkt.payload) - 1);
-
-		data.size = sizeof(pkt);
-
-		// Поки не відправиться / не приймемо рішення дропнути
-		for (;;) {
-			err = esp_mesh_send(&dest, &data, MESH_DATA_P2P, NULL, 0);
-			if (err == ESP_OK) {
-				ESP_LOGI(TAG, "TX -> ROOT legacy: \"%s\"", msg.text);
-				break;
-			}
-
-			ESP_LOGW(TAG,
-			         "esp_mesh_send failed: 0x%x (%s), retry later",
-			         err, esp_err_to_name(err));
-
-			// Пробуємо покласти повідомлення назад у початок черги
-			if (xQueueSendToFront(s_q, &msg, 0) != pdPASS) {
-				ESP_LOGW(TAG,
-				         "queue full on retry, drop message \"%s\"",
-				         msg.text);
-				break;  // щоб не зациклитися
-			}
-
-			// Чекаємо секунду, даємо mesh'у шанс відновитися
-			vTaskDelay(pdMS_TO_TICKS(1000));
-		}
-	}
+	(void)task_priority;
 }
-
-// -----------------------------------------------------------------------------
-//  Публічні функції
-// -----------------------------------------------------------------------------
-
-void legacy_root_sender_start(UBaseType_t task_prio)
-{
-    if (s_q) {
-        return;  // вже запущено
-    }
-
-    // Якщо передали 0 – підставляємо дефолтне значення
-    if (task_prio == 0) {
-        task_prio = 5;
-    }
-
-    s_q = xQueueCreate(LEGACY_ROOT_QUEUE_LEN, sizeof(legacy_msg_t));
-    if (!s_q) {
-        ESP_LOGE(TAG, "failed to create queue");
-        return;
-    }
-
-    BaseType_t ok = xTaskCreate(
-        legacy_root_sender_task,
-        "legacy_root_tx",
-        4096,
-        NULL,
-        task_prio,
-        &s_task
-    );
-
-    if (ok != pdPASS) {
-        ESP_LOGE(TAG, "failed to create task");
-        vQueueDelete(s_q);
-        s_q = NULL;
-    } else {
-        ESP_LOGI(TAG, "legacy_root_sender started, prio=%u, queue len=%d",
-                 (unsigned)task_prio, LEGACY_ROOT_QUEUE_LEN);
-    }
-}
-
 
 bool legacy_send_to_root(const char *text)
 {
-	if (!s_q || !text || !text[0]) {
-		return false;
+	if (!text || !text[0]) return false;
+	if (mesh_v2_node_reliable_ready()) {
+		esp_err_t event_err = mesh_v2_node_send_event(0, text);
+		if (event_err != ESP_OK) {
+			ESP_LOGW(TAG, "V2 event submit failed: %s",
+				 esp_err_to_name(event_err));
+			return false;
+		}
+		return true;
 	}
 
-	legacy_msg_t msg = {0};
-	strncpy(msg.text, text, sizeof(msg.text) - 1);
+	mesh_packet_t packet = {0};
+	packet.magic = MESH_PKT_MAGIC;
+	packet.version = MESH_PKT_VERSION;
+	packet.type = MESH_PKT_TYPE_TEXT;
+	portENTER_CRITICAL(&s_counter_lock);
+	packet.counter = ++s_counter;
+	portEXIT_CRITICAL(&s_counter_lock);
+	(void)esp_wifi_get_mac(WIFI_IF_STA, packet.src_mac);
+	strncpy(packet.payload, text, sizeof(packet.payload) - 1);
 
-	BaseType_t ok = xQueueSend(s_q, &msg, 0);
-	if (ok != pdPASS) {
-		ESP_LOGW(TAG, "queue full, drop \"%s\"", msg.text);
+	static const uint8_t root[6] = {0};
+	esp_err_t err = keemash_mesh_transport_send(root, &packet, sizeof(packet));
+	if (err != ESP_OK) {
+		ESP_LOGW(TAG, "V1 submit failed: %s", esp_err_to_name(err));
 		return false;
 	}
 	return true;

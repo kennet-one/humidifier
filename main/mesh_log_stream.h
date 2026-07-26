@@ -1,20 +1,16 @@
+// SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "esp_err.h"
+#include "keemash_mesh_log_stream.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-// Викликати 1 раз на старті (після log_time_vprintf_start())
-void mesh_log_stream_init(const char *tag);
-
-// Викликати коли нода реально підключилась до mesh (PARENT_CONNECTED)
-void mesh_log_stream_on_mesh_connected(void);
-
-// Викликати з mesh_rx_task() коли прийшов пакет типу MESH_LOG_TYPE_CTRL
-esp_err_t mesh_log_stream_handle_rx(const void *pkt_buf, size_t pkt_len);
-
-#ifdef __cplusplus
-}
-#endif
+#define mesh_log_stream_init keemash_mesh_log_stream_init
+#define mesh_log_stream_on_mesh_connected keemash_mesh_log_stream_on_mesh_connected
+#define mesh_log_stream_on_mesh_disconnected keemash_mesh_log_stream_on_mesh_disconnected
+#define mesh_log_stream_transport_ready keemash_mesh_log_stream_transport_ready
+#define mesh_log_stream_send_nodeinfo_now keemash_mesh_log_stream_send_nodeinfo_now
+#define mesh_log_stream_kick_nodeinfo_burst keemash_mesh_log_stream_kick_nodeinfo_burst
+#define mesh_log_stream_last_send_err keemash_mesh_log_stream_last_send_err
+#define mesh_log_stream_tx_accepted_age_ms keemash_mesh_log_stream_tx_accepted_age_ms
+#define mesh_log_stream_clear_tx_accepted keemash_mesh_log_stream_clear_tx_accepted
+#define mesh_log_stream_enabled keemash_mesh_log_stream_enabled
+#define mesh_log_stream_handle_rx keemash_mesh_log_stream_handle_v1_ctrl

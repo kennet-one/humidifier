@@ -1,4 +1,4 @@
-menu "Example Configuration"
+menu "KeeMASH Humidifier Configuration"
 
     choice
         bool "Mesh Topology"
@@ -108,13 +108,11 @@ menu "Example Configuration"
 
     config MESH_ROUTER_SSID
         string "Router SSID"
-        default "ROUTER_SSID"
         help
             Router SSID.
 
     config MESH_ROUTER_PASSWD
         string "Router password"
-        default "ROUTER_PASSWD"
         help
             Router password.
 
@@ -145,7 +143,6 @@ menu "Example Configuration"
 
     config MESH_AP_PASSWD
         string "Mesh AP Password"
-        default "MAP_PASSWD"
         help
             Mesh AP password.
 
@@ -169,4 +166,12 @@ menu "Example Configuration"
         default 50
         help
             The number of devices over the network(max: 300).
+
+    config HUMIDIFIER_MESH_RELAY_ELIGIBLE
+        bool "Advertise this firmware as relay eligible"
+        default y
+        help
+            This node is the first planned ESP-MESH relay. ESP-MESH performs
+            forwarding; this flag advertises that production role in typed
+            topology diagnostics.
 endmenu

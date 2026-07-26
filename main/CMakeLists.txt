@@ -1,13 +1,26 @@
-idf_component_register(SRCS "mesh_main.c"
-                        "legacy_proto.c"                   
-                        "stack_monitor.c"
-                        "legacy_root_sender.c"
-                        "relay_block_pca8574.c"
-                        "humid_ctrl.c"
-                        "water_led.c"
-                        "pms5003_node.c"
-                        "mesh_time_sync.c"
-                        "log_time_vprintf.c"
-                        "mesh_log_stream.c"
-                    PRIV_REQUIRES esp_wifi esp_driver_gpio esp_adc driver led_strip nvs_flash
-                    INCLUDE_DIRS "." "include")
+idf_component_register(
+    SRCS
+        "mesh_main.c"
+        "mesh_v2_link.c"
+        "legacy_proto.c"
+        "legacy_root_sender.c"
+        "relay_block_pca8574.c"
+        "humid_ctrl.c"
+        "water_led.c"
+        "pms5003_node.c"
+    PRIV_REQUIRES
+        keemash_mesh_core
+        esp_wifi
+        esp_driver_gpio
+        esp_driver_i2c
+        esp_driver_uart
+        nvs_flash
+        esp_timer
+        esp_system
+        esp_app_format
+        app_update
+        spi_flash
+        bootloader_support
+        led_strip
+    INCLUDE_DIRS "." "include"
+)

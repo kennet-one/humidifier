@@ -1,224 +1,278 @@
+// SPDX-License-Identifier: Apache-2.0
 #include "pms5003_node.h"
 
-#include <string.h>
 #include <stdio.h>
-#include <stdint.h>
-
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-
-#include "esp_log.h"
-#include "esp_err.h"
+#include <string.h>
 
 #include "driver/uart.h"
-#include "driver/gpio.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 
+#include "humidifier_board.h"
 #include "legacy_root_sender.h"
 
 static const char *TAG = "pms5003";
+static TaskHandle_t s_task;
+static SemaphoreHandle_t s_lock;
+static pms5003_status_t s_status;
+static int s_task_priority = 5;
 
-#define PMS_UART				UART_NUM_1
-#define PMS_TX_GPIO				GPIO_NUM_17
-#define PMS_RX_GPIO				GPIO_NUM_16
-#define PMS_BAUDRATE				9600
+#define PMS_FRAME_TIMEOUT_MS 2000U
+#define PMS_TOTAL_DEADLINE_MS 12000U
 
-// Для тесту можеш тимчасово зменшити до 5000, потім повернути 30000
-#define PMS_WAKE_WARMUP_MS			30000
-
-#define PMS_FRAME_TIMEOUT_MS			2000
-#define PMS_TOTAL_DEADLINE_MS			12000
-
-static TaskHandle_t s_task = NULL;
-
-static void pms_uart_init(void)
+static void status_set_error(esp_err_t err)
 {
-	uart_config_t cfg = {
-		.baud_rate = PMS_BAUDRATE,
+	if (!s_lock) return;
+	(void)xSemaphoreTake(s_lock, portMAX_DELAY);
+	s_status.last_error = err;
+	xSemaphoreGive(s_lock);
+}
+
+void pms5003_get_status(pms5003_status_t *status)
+{
+	if (!status) return;
+	if (!s_lock) {
+		memset(status, 0, sizeof(*status));
+		status->last_error = ESP_ERR_INVALID_STATE;
+		return;
+	}
+	(void)xSemaphoreTake(s_lock, portMAX_DELAY);
+	*status = s_status;
+	xSemaphoreGive(s_lock);
+}
+
+static esp_err_t pms_uart_init(void)
+{
+	uart_config_t config = {
+		.baud_rate = HUMIDIFIER_PMS_BAUDRATE,
 		.data_bits = UART_DATA_8_BITS,
 		.parity = UART_PARITY_DISABLE,
 		.stop_bits = UART_STOP_BITS_1,
 		.flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
 		.source_clk = UART_SCLK_DEFAULT,
 	};
-
-	ESP_ERROR_CHECK(uart_driver_install(PMS_UART, 4096, 0, 0, NULL, 0));
-	ESP_ERROR_CHECK(uart_param_config(PMS_UART, &cfg));
-	ESP_ERROR_CHECK(uart_set_pin(PMS_UART, PMS_TX_GPIO, PMS_RX_GPIO, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-	ESP_ERROR_CHECK(uart_flush_input(PMS_UART));
-
-	ESP_LOGI(TAG, "UART init OK (TX=%d RX=%d)", (int)PMS_TX_GPIO, (int)PMS_RX_GPIO);
+	esp_err_t err = uart_driver_install(HUMIDIFIER_PMS_UART, 4096, 0, 0, NULL, 0);
+	if (err != ESP_OK) return err;
+	err = uart_param_config(HUMIDIFIER_PMS_UART, &config);
+	if (err == ESP_OK) {
+		err = uart_set_pin(HUMIDIFIER_PMS_UART, HUMIDIFIER_PMS_TX_GPIO,
+				   HUMIDIFIER_PMS_RX_GPIO, UART_PIN_NO_CHANGE,
+				   UART_PIN_NO_CHANGE);
+	}
+	if (err == ESP_OK) err = uart_flush_input(HUMIDIFIER_PMS_UART);
+	if (err != ESP_OK) {
+		(void)uart_driver_delete(HUMIDIFIER_PMS_UART);
+		return err;
+	}
+	ESP_LOGI(TAG, "UART ready TX=%d RX=%d", (int)HUMIDIFIER_PMS_TX_GPIO,
+		 (int)HUMIDIFIER_PMS_RX_GPIO);
+	return ESP_OK;
 }
 
-static void pms_send_cmd(uint8_t cmd, uint16_t data)
+static esp_err_t pms_send_command(uint8_t command, uint16_t value)
 {
-	uint8_t f[7];
-
-	f[0] = 0x42;
-	f[1] = 0x4D;
-	f[2] = cmd;
-	f[3] = (uint8_t)((data >> 8) & 0xFF);
-	f[4] = (uint8_t)(data & 0xFF);
-
+	uint8_t frame[7] = {
+		0x42, 0x4d, command, (uint8_t)(value >> 8), (uint8_t)value, 0, 0,
+	};
 	uint16_t sum = 0;
-	for (int i = 0; i < 5; i++) {
-		sum += f[i];
-	}
-
-	f[5] = (uint8_t)((sum >> 8) & 0xFF);
-	f[6] = (uint8_t)(sum & 0xFF);
-
-	uart_write_bytes(PMS_UART, (const char *)f, sizeof(f));
-	uart_wait_tx_done(PMS_UART, pdMS_TO_TICKS(100));
-
-	ESP_LOGI(TAG, "cmd 0x%02X data=0x%04X sum=0x%04X", (unsigned)cmd, (unsigned)data, (unsigned)sum);
+	for (size_t i = 0; i < 5; ++i) sum += frame[i];
+	frame[5] = (uint8_t)(sum >> 8);
+	frame[6] = (uint8_t)sum;
+	int written = uart_write_bytes(HUMIDIFIER_PMS_UART, frame, sizeof(frame));
+	if (written != sizeof(frame)) return ESP_FAIL;
+	return uart_wait_tx_done(HUMIDIFIER_PMS_UART, pdMS_TO_TICKS(200));
 }
 
-static esp_err_t pms_read_one_frame(uint8_t *out, size_t out_sz, uint16_t *out_len_field, TickType_t timeout_ticks)
+static esp_err_t pms_read_frame(uint8_t *output, size_t output_size,
+				uint16_t *length_field, TickType_t timeout)
 {
-	TickType_t start = xTaskGetTickCount();
-	uint8_t b = 0;
-
-	while ((xTaskGetTickCount() - start) < timeout_ticks) {
-		if (uart_read_bytes(PMS_UART, &b, 1, pdMS_TO_TICKS(50)) != 1) continue;
-		if (b != 0x42) continue;
-
-		if (uart_read_bytes(PMS_UART, &b, 1, pdMS_TO_TICKS(200)) != 1) continue;
-		if (b != 0x4D) continue;
-
-		out[0] = 0x42;
-		out[1] = 0x4D;
-
-		if (uart_read_bytes(PMS_UART, &out[2], 2, pdMS_TO_TICKS(200)) != 2) return ESP_ERR_TIMEOUT;
-
-		uint16_t len = ((uint16_t)out[2] << 8) | out[3];
-		*out_len_field = len;
-
-		if (len < 2 || len > 60) return ESP_ERR_INVALID_SIZE;
-		if ((4 + len) > out_sz) return ESP_ERR_INVALID_SIZE;
-
-		int need = (int)len;
-		int off = 4;
-
-		while (need > 0 && (xTaskGetTickCount() - start) < timeout_ticks) {
-			int n = uart_read_bytes(PMS_UART, out + off, need, pdMS_TO_TICKS(100));
-			if (n > 0) {
-				off += n;
-				need -= n;
-			}
+	TickType_t started = xTaskGetTickCount();
+	uint8_t byte;
+	while ((xTaskGetTickCount() - started) < timeout) {
+		if (uart_read_bytes(HUMIDIFIER_PMS_UART, &byte, 1,
+				    pdMS_TO_TICKS(50)) != 1 || byte != 0x42) {
+			continue;
 		}
-		if (need != 0) return ESP_ERR_TIMEOUT;
+		if (uart_read_bytes(HUMIDIFIER_PMS_UART, &byte, 1,
+				    pdMS_TO_TICKS(200)) != 1 || byte != 0x4d) {
+			continue;
+		}
+		output[0] = 0x42;
+		output[1] = 0x4d;
+		if (uart_read_bytes(HUMIDIFIER_PMS_UART, output + 2, 2,
+				    pdMS_TO_TICKS(200)) != 2) {
+			return ESP_ERR_TIMEOUT;
+		}
+		uint16_t length = ((uint16_t)output[2] << 8) | output[3];
+		*length_field = length;
+		if (length < 2 || length > 60 || 4U + length > output_size) {
+			return ESP_ERR_INVALID_SIZE;
+		}
+		size_t received = 0;
+		while (received < length && (xTaskGetTickCount() - started) < timeout) {
+			int count = uart_read_bytes(HUMIDIFIER_PMS_UART,
+						    output + 4 + received,
+						    length - received,
+						    pdMS_TO_TICKS(100));
+			if (count > 0) received += (size_t)count;
+		}
+		if (received != length) return ESP_ERR_TIMEOUT;
 
-		int total = 4 + len;
-
+		size_t total = 4U + length;
 		uint16_t sum = 0;
-		for (int i = 0; i < total - 2; i++) {
-			sum += out[i];
-		}
-		uint16_t chk = ((uint16_t)out[total - 2] << 8) | out[total - 1];
-
-		if (sum != chk) return ESP_ERR_INVALID_CRC;
-
-		return ESP_OK;
+		for (size_t i = 0; i < total - 2; ++i) sum += output[i];
+		uint16_t expected =
+			((uint16_t)output[total - 2] << 8) | output[total - 1];
+		return sum == expected ? ESP_OK : ESP_ERR_INVALID_CRC;
 	}
-
 	return ESP_ERR_TIMEOUT;
 }
 
-static void pms_publish(uint16_t pm1, uint16_t pm25, uint16_t pm10)
+static void publish_values(uint16_t pm1, uint16_t pm25, uint16_t pm10)
 {
-	char s[32];
-
-	snprintf(s, sizeof(s), "10%u", (unsigned)pm1);
-	legacy_send_to_root(s);
-
-	snprintf(s, sizeof(s), "11%u", (unsigned)pm25);
-	legacy_send_to_root(s);
-
-	snprintf(s, sizeof(s), "12%u", (unsigned)pm10);
-	legacy_send_to_root(s);
-
-	ESP_LOGI(TAG, "publish PM1=%u PM2.5=%u PM10=%u", (unsigned)pm1, (unsigned)pm25, (unsigned)pm10);
+	char text[32];
+	snprintf(text, sizeof(text), "10%u", (unsigned)pm1);
+	(void)legacy_send_to_root(text);
+	snprintf(text, sizeof(text), "11%u", (unsigned)pm25);
+	(void)legacy_send_to_root(text);
+	snprintf(text, sizeof(text), "12%u", (unsigned)pm10);
+	(void)legacy_send_to_root(text);
 }
 
-static void pms_task(void *arg)
+static void finish_measurement(esp_err_t err, bool values_valid, uint16_t pm1,
+			       uint16_t pm25, uint16_t pm10)
 {
-	uint8_t buf[64];
+	if (!s_lock) return;
+	(void)xSemaphoreTake(s_lock, portMAX_DELAY);
+	s_status.busy = false;
+	s_status.last_error = err;
+	if (values_valid) {
+		s_status.pm1 = pm1;
+		s_status.pm25 = pm25;
+		s_status.pm10 = pm10;
+		s_status.completed_count++;
+	}
+	xSemaphoreGive(s_lock);
+}
 
-	pms_uart_init();
+static void pms_task(void *argument)
+{
+	(void)argument;
+	uint8_t buffer[64];
+	esp_err_t startup_err = pms_send_command(0xe1, 0x0000);
+	if (startup_err == ESP_OK) startup_err = pms_send_command(0xe4, 0x0000);
+	if (startup_err != ESP_OK) {
+		status_set_error(startup_err);
+		ESP_LOGW(TAG, "initial sleep command failed: %s",
+			 esp_err_to_name(startup_err));
+	}
 
-	// На старті: пасив + sleep
-	pms_send_cmd(0xE1, 0x0000);
-	pms_send_cmd(0xE4, 0x0000);
-
-	while (1) {
-		ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
-		legacy_send_to_root("pm155555555555555");
-
-		ESP_LOGI(TAG, "trigger -> wake");
-		pms_send_cmd(0xE4, 0x0001); // wake
-		vTaskDelay(pdMS_TO_TICKS(PMS_WAKE_WARMUP_MS));
-
-		// Переходимо в ACTIVE щоб сенсор сам почав стрімити data-frame
-		pms_send_cmd(0xE1, 0x0001); // ACTIVE
-		vTaskDelay(pdMS_TO_TICKS(1200));
-
-		uint16_t len = 0;
-		esp_err_t err = ESP_FAIL;
-
-		TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(PMS_TOTAL_DEADLINE_MS);
-
-		while (xTaskGetTickCount() < deadline) {
-			err = pms_read_one_frame(buf, sizeof(buf), &len, pdMS_TO_TICKS(PMS_FRAME_TIMEOUT_MS));
-			if (err == ESP_OK) {
-				if (len == 28) {
-					break; // нормальний data-frame (32 bytes total)
-				}
-				ESP_LOGI(TAG, "skip frame len=%u", (unsigned)len); // ACK кадри теж сюди
-			} else {
-				ESP_LOGW(TAG, "frame err=0x%x (%s)", err, esp_err_to_name(err));
-			}
+	for (;;) {
+		(void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+		(void)legacy_send_to_root("pm155555555555555");
+		esp_err_t err = pms_send_command(0xe4, 0x0001);
+		if (err == ESP_OK) {
+			vTaskDelay(pdMS_TO_TICKS(HUMIDIFIER_PMS_WAKE_WARMUP_MS));
+			err = pms_send_command(0xe1, 0x0001);
 		}
+		if (err == ESP_OK) vTaskDelay(pdMS_TO_TICKS(1200));
 
-		size_t blen = 0;
-		uart_get_buffered_data_len(PMS_UART, &blen);
-		char dbg[32];
-		snprintf(dbg, sizeof(dbg), "pm1_buf%u", (unsigned)blen);
-		legacy_send_to_root(dbg);
+		uint16_t length = 0;
+		TickType_t started = xTaskGetTickCount();
+		while (err == ESP_OK &&
+		       (xTaskGetTickCount() - started) <
+			       pdMS_TO_TICKS(PMS_TOTAL_DEADLINE_MS)) {
+			err = pms_read_frame(buffer, sizeof(buffer), &length,
+					     pdMS_TO_TICKS(PMS_FRAME_TIMEOUT_MS));
+			if (err == ESP_OK && length == 28) break;
+			if (err == ESP_OK) continue;
+			if (err != ESP_ERR_TIMEOUT && err != ESP_ERR_INVALID_CRC) break;
+			err = ESP_OK;
+		}
+		if (err == ESP_OK && length != 28) err = ESP_ERR_TIMEOUT;
 
-		if (err == ESP_OK && len == 28) {
-			// Atmospheric environment: Data4..Data6
-			uint16_t pm1_atm  = ((uint16_t)buf[10] << 8) | buf[11];
-			uint16_t pm25_atm = ((uint16_t)buf[12] << 8) | buf[13];
-			uint16_t pm10_atm = ((uint16_t)buf[14] << 8) | buf[15];
-
-			pms_publish(pm1_atm, pm25_atm, pm10_atm);
+		uint16_t pm1 = 0;
+		uint16_t pm25 = 0;
+		uint16_t pm10 = 0;
+		bool values_valid = err == ESP_OK;
+		if (values_valid) {
+			pm1 = ((uint16_t)buffer[10] << 8) | buffer[11];
+			pm25 = ((uint16_t)buffer[12] << 8) | buffer[13];
+			pm10 = ((uint16_t)buffer[14] << 8) | buffer[15];
+			publish_values(pm1, pm25, pm10);
+			ESP_LOGI(TAG, "PM1=%u PM2.5=%u PM10=%u",
+				 (unsigned)pm1, (unsigned)pm25, (unsigned)pm10);
 		} else {
-			char e[32];
-			snprintf(e, sizeof(e), "pm1_e%X", (unsigned)err);
-			legacy_send_to_root(e);
-			legacy_send_to_root("pm1_fail");
+			char text[32];
+			snprintf(text, sizeof(text), "pm1_e%X", (unsigned)err);
+			(void)legacy_send_to_root(text);
+			(void)legacy_send_to_root("pm1_fail");
+			ESP_LOGW(TAG, "measurement failed: %s", esp_err_to_name(err));
 		}
 
-		// Назад у пасив і sleep
-		pms_send_cmd(0xE1, 0x0000); // PASSIVE
-		pms_send_cmd(0xE4, 0x0000); // SLEEP
-		ESP_LOGI(TAG, "sleep");
-		uart_flush_input(PMS_UART);
-
+		esp_err_t cleanup_err = pms_send_command(0xe1, 0x0000);
+		if (cleanup_err == ESP_OK) cleanup_err = pms_send_command(0xe4, 0x0000);
+		if (cleanup_err == ESP_OK) cleanup_err = uart_flush_input(HUMIDIFIER_PMS_UART);
+		if (cleanup_err != ESP_OK) {
+			ESP_LOGW(TAG, "sleep cleanup failed: %s",
+				 esp_err_to_name(cleanup_err));
+		}
+		esp_err_t final_err = err != ESP_OK ? err : cleanup_err;
+		finish_measurement(final_err, values_valid, pm1, pm25, pm10);
 	}
 }
 
-void pms5003_start(int task_prio)
+esp_err_t pms5003_start(int task_priority)
 {
-	if (s_task) return;
+	if (!s_lock) {
+		s_lock = xSemaphoreCreateMutex();
+		if (!s_lock) return ESP_ERR_NO_MEM;
+	}
+	if (s_task) return ESP_OK;
+	if (task_priority > 0) s_task_priority = task_priority;
 
-	xTaskCreate(pms_task, "pms5003", 4096, NULL, task_prio, &s_task);
+	esp_err_t err = pms_uart_init();
+	if (err != ESP_OK) {
+		status_set_error(err);
+		return err;
+	}
+	if (xTaskCreate(pms_task, "pms5003", 5120, NULL, s_task_priority, &s_task) !=
+	    pdPASS) {
+		s_task = NULL;
+		(void)uart_driver_delete(HUMIDIFIER_PMS_UART);
+		(void)xSemaphoreTake(s_lock, portMAX_DELAY);
+		s_status.ready = false;
+		s_status.busy = false;
+		s_status.last_error = ESP_ERR_NO_MEM;
+		xSemaphoreGive(s_lock);
+		return ESP_ERR_NO_MEM;
+	}
+	if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
+		s_status.ready = true;
+		s_status.last_error = ESP_OK;
+		xSemaphoreGive(s_lock);
+	}
+	return ESP_OK;
 }
 
-void pms5003_trigger_once(void)
+esp_err_t pms5003_trigger_once(void)
 {
-	if (s_task) {
-		xTaskNotifyGive(s_task);
+	if (!s_task) {
+		esp_err_t err = pms5003_start(s_task_priority);
+		if (err != ESP_OK) return err;
 	}
+	if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) != pdTRUE) {
+		return ESP_ERR_TIMEOUT;
+	}
+	if (s_status.busy) {
+		xSemaphoreGive(s_lock);
+		return ESP_ERR_INVALID_STATE;
+	}
+	s_status.busy = true;
+	s_status.last_error = ESP_OK;
+	xSemaphoreGive(s_lock);
+	xTaskNotifyGive(s_task);
+	return ESP_OK;
 }

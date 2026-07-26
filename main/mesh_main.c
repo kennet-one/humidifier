@@ -1,416 +1,659 @@
-#include <string.h>
-#include <stdio.h>
+// SPDX-License-Identifier: Apache-2.0
 #include <inttypes.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#include "esp_wifi.h"
-#include "esp_mac.h"
+#include "esp_app_desc.h"
+#include "esp_err.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "esp_mesh.h"
-#include "esp_mesh_internal.h"
 #include "esp_netif.h"
+#include "esp_ota_ops.h"
+#include "esp_system.h"
+#include "esp_timer.h"
+#include "esp_wifi.h"
 #include "nvs_flash.h"
-#include "led_strip.h"
 
+#include "keemash_log_time_vprintf.h"
+#include "keemash_mesh_node.h"
+#include "keemash_mesh_ota_receiver.h"
 #include "legacy_proto.h"
-#include "stack_monitor.h"
-#include "humid_ctrl.h"
-#include "legacy_root_sender.h"
-#include "water_led.h"
-#include "pms5003_node.h"
-#include "mesh_proto.h"
-#include "log_time_vprintf.h"
-#include "mesh_time_sync.h"
 #include "mesh_log_stream.h"
+#include "mesh_proto.h"
+#include "mesh_time_sync.h"
+#include "mesh_v2_link.h"
+#include "humid_ctrl.h"
+#include "pms5003_node.h"
+#include "water_led.h"
 
-/* -------------------------------------------------------------------------- */
-/*  Константи / глобальні змінні                                              */
-/* -------------------------------------------------------------------------- */
+#define RX_SIZE 512
+#define RECOVERY_CHECK_MS 5000U
+#define ACK_FRESH_MS 30000U
+#define RECOVERY_BURST_MS 5000U
+#define RECOVERY_RECONNECT_MS 30000U
+#define RECOVERY_RESTART_MS 75000U
+#define RECOVERY_LOG_MS 15000U
+#define RECOVERY_ACTION_BACKOFF_MS 20000U
 
-#define RX_SIZE          (256)
-#define TX_INTERVAL_MS   (5000)
+#ifdef CONFIG_HUMIDIFIER_MESH_RELAY_ELIGIBLE
+#define HUMIDIFIER_RELAY_ELIGIBLE true
+#else
+#define HUMIDIFIER_RELAY_ELIGIBLE false
+#endif
 
-static const char *MESH_TAG = "humidifier";
+typedef enum {
+	RECOVERY_OK = 0,
+	RECOVERY_WAIT_ACK = 1,
+	RECOVERY_RECONNECT = 2,
+	RECOVERY_MESH_RESTART = 3,
+} recovery_phase_t;
 
-/* Один і той самий MESH_ID на всі ноди в цій мережі */
-static const uint8_t MESH_ID[6] = { 0x77, 0x77, 0x77, 0x77, 0x77, 0x77 };
+static const char *TAG = "humidifier";
+static const uint8_t MESH_ID[6] = {0x77, 0x77, 0x77, 0x77, 0x77, 0x77};
 
-static bool       is_running        = true;
-static bool       is_mesh_connected = false;
-static mesh_addr_t mesh_parent_addr;
-static int        mesh_layer        = -1;
-static esp_netif_t *netif_sta       = NULL;
+static volatile bool s_running = true;
+static volatile bool s_parent_connected;
+static volatile bool s_mesh_recovering;
+static esp_netif_t *s_netif_sta;
+static mesh_addr_t s_parent_addr;
+static mesh_addr_t s_root_mesh_addr;
+static int s_layer = -1;
+static uint32_t s_unhealthy_since_ms;
+static uint32_t s_last_burst_ms;
+static uint32_t s_last_recovery_log_ms;
+static uint32_t s_last_recovery_action_ms;
+static uint32_t s_last_soft_reconnect_ms;
+static uint32_t s_boot_seq;
+static uint16_t s_parent_disconnect_count;
+static uint16_t s_no_parent_count;
+static uint16_t s_rootless_count;
+static uint16_t s_soft_reconnect_count;
+static uint16_t s_mesh_restart_count;
+static uint16_t s_ack_stale_count;
+static uint16_t s_tx_without_ack_count;
+static uint8_t s_last_parent_disconnect_reason;
+static uint8_t s_last_recovery_reason;
+static recovery_phase_t s_recovery_phase = RECOVERY_OK;
+static bool s_rollback_pending;
+static bool s_telemetry_synced;
+static bool s_application_healthy;
+static bool s_mesh_initialized;
+static bool s_mesh_event_registered;
+static bool s_mesh_started;
+static TaskHandle_t s_mesh_rx_task;
+static TaskHandle_t s_recovery_task;
+static TaskHandle_t s_startup_retry_task;
 
-/* -------------------------------------------------------------------------- */
-/*  Мінімальний власний протокол                                              */
-/* -------------------------------------------------------------------------- */
-/*
- * Формат нашого пакету:
- *  magic    - 0xA5 (для перевірки, що це "наш" пакет)
- *  version  - версія протоколу (1)
- *  type     - тип (1 = просто текстове "Hello N")
- *  reserved - вирівнювання, запас
- *  counter  - лічильник пакета від цієї ноди
- *  src_mac  - MAC відправника
- *  payload  - невеликий текст (рядок з '\0' в кінці)
- */
-
-/* -------------------------------------------------------------------------- */
-/*  Прототипи                                                                 */
-/* -------------------------------------------------------------------------- */
-
-static void mesh_event_handler(void *arg,
-                               esp_event_base_t event_base,
-                               int32_t event_id,
-                               void *event_data);
-
-static void mesh_rx_task(void *arg);
-static esp_err_t mesh_comm_start(void);
-
-/* -------------------------------------------------------------------------- */
-/*  RX task – слухаємо пакети від інших нод                                   */
-/* -------------------------------------------------------------------------- */
-
-static void mesh_rx_task(void *arg)
+static uint32_t tick_ms(void)
 {
-	uint8_t		rx_buf[256];
-
-	mesh_data_t	data = {
-		.data	= rx_buf,
-		.size	= sizeof(rx_buf),
-	};
-
-	mesh_addr_t	from;
-	int		flag = 0;
-	esp_err_t	err;
-
-	while (is_running) {
-		data.size = sizeof(rx_buf);
-
-		err = esp_mesh_recv(&from, &data, portMAX_DELAY, &flag, NULL, 0);
-		if (err != ESP_OK) {
-			ESP_LOGE(MESH_TAG, "esp_mesh_recv failed: 0x%x (%s)", err, esp_err_to_name(err));
-			continue;
-		}
-
-		if (data.size < sizeof(mesh_pkt_hdr_t)) {
-			ESP_LOGW(MESH_TAG, "RX too short: %d bytes", (int)data.size);
-			continue;
-		}
-
-		const mesh_pkt_hdr_t *h = (const mesh_pkt_hdr_t *)rx_buf;
-
-		// не наш протокол? ігноруємо
-		if (h->magic != MESH_PKT_MAGIC || h->version != MESH_PKT_VERSION) {
-			ESP_LOGW(MESH_TAG, "RX unknown packet from " MACSTR " (%d bytes)", MAC2STR(from.addr), (int)data.size);
-			continue;
-		}
-
-		// диспетчер типів
-		if (h->type == MESH_TIME_SYNC_TYPE_TIME) {
-			mesh_time_sync_handle_rx(rx_buf, data.size);
-			continue;
-		}
-
-		if (h->type == MESH_LOG_TYPE_CTRL) {
-			mesh_log_stream_handle_rx(rx_buf, data.size);
-			continue;
-		}
-
-		if (h->type == MESH_PKT_TYPE_TEXT) {
-			if (data.size < sizeof(mesh_packet_t)) {
-				ESP_LOGW(MESH_TAG, "RX TEXT short: %d bytes", (int)data.size);
-				continue;
-			}
-
-			const mesh_packet_t *p = (const mesh_packet_t *)rx_buf;
-
-			// гарантуємо '\0'
-			char payload[sizeof(p->payload)];
-			memcpy(payload, p->payload, sizeof(payload));
-			payload[sizeof(payload) - 1] = '\0';
-
-			ESP_LOGI(MESH_TAG, "RX TEXT from " MACSTR " (src=" MACSTR "): \"%s\"",
-				MAC2STR(from.addr),
-				MAC2STR(p->src_mac),
-				payload
-			);
-
-			// <-- ОЦЕ МІСЦЕ: якщо в тебе не legacy_handle_text(), заміни на свій handler
-			legacy_handle_text(payload);
-
-			continue;
-		}
-
-		ESP_LOGI(MESH_TAG, "RX type=%u from " MACSTR " (%d bytes)",
-			(unsigned)h->type, MAC2STR(from.addr), (int)data.size);
-	}
-
-	vTaskDelete(NULL);
+	return (uint32_t)(esp_timer_get_time() / 1000ULL);
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Запуск задач TX/RX один раз                                               */
-/* -------------------------------------------------------------------------- */
-
-static esp_err_t mesh_comm_start(void)
+static bool copy_config_value(uint8_t *destination, size_t destination_size,
+			      const char *value, size_t *written)
 {
-	static bool started = false;
+	if (!destination || !value) return false;
+	size_t length = strlen(value);
+	if (length >= destination_size) return false;
+	memset(destination, 0, destination_size);
+	memcpy(destination, value, length);
+	if (written) *written = length;
+	return true;
+}
 
-	if (!started) {
-		started = true;
-		xTaskCreate(mesh_rx_task, "mesh_rx", 4096, NULL, 5, NULL);
-        stack_monitor_start(3);
-		legacy_root_sender_start(5);
-		humid_ctrl_init();
-		pms5003_start(5);
-		
+static esp_err_t fill_mesh_config(mesh_cfg_t *config)
+{
+	if (!config) return ESP_ERR_INVALID_ARG;
+	*config = (mesh_cfg_t)MESH_INIT_CONFIG_DEFAULT();
+	memcpy(config->mesh_id.addr, MESH_ID, sizeof(MESH_ID));
+	config->channel = CONFIG_MESH_CHANNEL;
+
+	size_t ssid_length = 0;
+	if (!copy_config_value(config->router.ssid, sizeof(config->router.ssid),
+			       CONFIG_MESH_ROUTER_SSID, &ssid_length) ||
+	    !copy_config_value(config->router.password, sizeof(config->router.password),
+			       CONFIG_MESH_ROUTER_PASSWD, NULL) ||
+	    !copy_config_value(config->mesh_ap.password, sizeof(config->mesh_ap.password),
+			       CONFIG_MESH_AP_PASSWD, NULL)) {
+		ESP_LOGE(TAG, "mesh credential length exceeds ESP-MESH limits");
+		return ESP_ERR_INVALID_SIZE;
 	}
+	config->router.ssid_len = ssid_length;
+	config->mesh_ap.max_connection = CONFIG_MESH_AP_CONNECTIONS;
+	config->mesh_ap.nonmesh_max_connection = CONFIG_MESH_NON_MESH_AP_CONNECTIONS;
 	return ESP_OK;
 }
 
-/* -------------------------------------------------------------------------- */
-/*  MESH events                                                               */
-/* -------------------------------------------------------------------------- */
-
-static void mesh_event_handler(void *arg,
-                               esp_event_base_t event_base,
-                               int32_t event_id,
-                               void *event_data)
+static esp_err_t configure_mesh(void)
 {
-	mesh_addr_t id = {0};
-	static uint16_t last_layer = 0;
+	esp_err_t err = esp_mesh_fix_root(false);
+	if (err != ESP_OK) return err;
+	if ((err = esp_mesh_set_topology(CONFIG_MESH_TOPOLOGY)) != ESP_OK) return err;
+	if ((err = esp_mesh_set_max_layer(CONFIG_MESH_MAX_LAYER)) != ESP_OK) return err;
+	if ((err = esp_mesh_set_vote_percentage(1)) != ESP_OK) return err;
+	if ((err = esp_mesh_set_xon_qsize(128)) != ESP_OK) return err;
+	if ((err = esp_mesh_disable_ps()) != ESP_OK) return err;
+	if ((err = esp_mesh_set_ap_assoc_expire(10)) != ESP_OK) return err;
+	if ((err = esp_mesh_set_ap_authmode(CONFIG_MESH_AP_AUTHMODE)) != ESP_OK) return err;
 
-	switch (event_id) {
-	case MESH_EVENT_STARTED: {
-		esp_mesh_get_id(&id);
-		ESP_LOGI(MESH_TAG,
-		         "<MESH_EVENT_STARTED> ID:" MACSTR,
-		         MAC2STR(id.addr));
-		is_mesh_connected = false;
-		mesh_layer = esp_mesh_get_layer();
+	mesh_cfg_t config;
+	if ((err = fill_mesh_config(&config)) != ESP_OK) return err;
+	return esp_mesh_set_config(&config);
+}
+
+static void update_topology(void)
+{
+	uint8_t root_mac[6] = {0};
+	(void)mesh_v2_node_get_root_mac(root_mac);
+	wifi_ap_record_t parent = {0};
+	int8_t rssi = 0;
+	if (esp_wifi_sta_get_ap_info(&parent) == ESP_OK) rssi = parent.rssi;
+	int route_count = esp_mesh_get_routing_table_size();
+	uint8_t descendants = route_count > 255 ? 255 :
+			      route_count > 0 ? (uint8_t)route_count : 0;
+	mesh_v2_node_update_topology(s_parent_addr.addr, root_mac,
+				     s_layer > 0 ? (uint16_t)s_layer : 0,
+				     CONFIG_MESH_MAX_LAYER, rssi, descendants);
+}
+
+static void update_diagnostics(void)
+{
+	mesh_v2_node_diag_t diagnostics = {
+		.boot_seq = s_boot_seq,
+		.last_recovery_action_ms = s_last_recovery_action_ms,
+		.last_mesh_send_err = mesh_log_stream_last_send_err(),
+		.ack_stale_count = s_ack_stale_count,
+		.tx_without_ack_count = s_tx_without_ack_count,
+		.reset_reason = (uint16_t)esp_reset_reason(),
+		.parent_disconnect_count = s_parent_disconnect_count,
+		.no_parent_count = s_no_parent_count,
+		.rootless_count = s_rootless_count,
+		.soft_reconnect_count = s_soft_reconnect_count,
+		.mesh_restart_count = s_mesh_restart_count,
+		.last_parent_disconnect_reason = s_last_parent_disconnect_reason,
+		.last_recovery_reason = s_last_recovery_reason,
+	};
+	mesh_v2_node_update_diagnostics(&diagnostics);
+	mesh_v2_node_set_recovery_phase((uint8_t)s_recovery_phase);
+}
+
+static void request_root_resync(void)
+{
+	update_topology();
+	update_diagnostics();
+	(void)mesh_v2_node_force_hello(false);
+}
+
+static void send_telemetry_burst(void)
+{
+	update_topology();
+	update_diagnostics();
+	mesh_log_stream_kick_nodeinfo_burst();
+	(void)mesh_log_stream_send_nodeinfo_now();
+	(void)mesh_v2_node_send_topology();
+	(void)mesh_v2_node_send_memory();
+	(void)humid_ctrl_publish_status();
+}
+
+static esp_err_t full_mesh_restart(void)
+{
+	if (s_mesh_recovering) return ESP_ERR_INVALID_STATE;
+	s_mesh_recovering = true;
+	s_parent_connected = false;
+	s_mesh_started = false;
+	mesh_v2_link_parent_disconnected();
+	mesh_v2_node_set_root_mac(NULL);
+
+	esp_err_t err = esp_mesh_stop();
+	if (err != ESP_OK && err != ESP_ERR_MESH_NOT_START) goto done;
+	vTaskDelay(pdMS_TO_TICKS(250));
+	err = esp_mesh_deinit();
+	if (err != ESP_OK && err != ESP_ERR_MESH_NOT_INIT) goto done;
+	err = esp_mesh_init();
+	if (err != ESP_OK) goto done;
+	err = configure_mesh();
+	if (err != ESP_OK) goto done;
+	err = esp_mesh_start();
+	if (err == ESP_OK) s_mesh_started = true;
+
+done:
+	s_mesh_recovering = false;
+	return err;
+}
+
+static void mark_rollback_valid_when_healthy(void)
+{
+	if (!s_rollback_pending || !s_application_healthy || !s_parent_connected ||
+	    !mesh_v2_node_reliable_ready()) {
+		return;
 	}
-	break;
-
-	case MESH_EVENT_STOPPED: {
-		ESP_LOGI(MESH_TAG, "<MESH_EVENT_STOPPED>");
-		is_mesh_connected = false;
-		mesh_layer = esp_mesh_get_layer();
+	esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+	if (err == ESP_OK) {
+		s_rollback_pending = false;
+		ESP_LOGI(TAG, "OTA rollback: running app marked valid after reliable handshake");
+	} else {
+		ESP_LOGE(TAG, "OTA rollback mark-valid failed: %s", esp_err_to_name(err));
 	}
-	break;
+}
 
-	case MESH_EVENT_CHILD_CONNECTED: {
-		mesh_event_child_connected_t *child =
-		    (mesh_event_child_connected_t *)event_data;
-		ESP_LOGI(MESH_TAG,
-		         "<MESH_EVENT_CHILD_CONNECTED> aid:%d, " MACSTR,
-		         child->aid, MAC2STR(child->mac));
-	}
-	break;
+static void recovery_task(void *arg)
+{
+	(void)arg;
+	for (;;) {
+		vTaskDelay(pdMS_TO_TICKS(RECOVERY_CHECK_MS));
+		uint32_t now = tick_ms();
+		mark_rollback_valid_when_healthy();
+		update_diagnostics();
 
-	case MESH_EVENT_CHILD_DISCONNECTED: {
-		mesh_event_child_disconnected_t *child =
-		    (mesh_event_child_disconnected_t *)event_data;
-		ESP_LOGI(MESH_TAG,
-		         "<MESH_EVENT_CHILD_DISCONNECTED> aid:%d, " MACSTR,
-		         child->aid, MAC2STR(child->mac));
-	}
-	break;
-
-	case MESH_EVENT_ROUTING_TABLE_ADD: {
-		mesh_event_routing_table_change_t *rt =
-		    (mesh_event_routing_table_change_t *)event_data;
-		ESP_LOGW(MESH_TAG,
-		         "<MESH_EVENT_ROUTING_TABLE_ADD> add %d, new:%d, layer:%d",
-		         rt->rt_size_change, rt->rt_size_new, mesh_layer);
-	}
-	break;
-
-	case MESH_EVENT_ROUTING_TABLE_REMOVE: {
-		mesh_event_routing_table_change_t *rt =
-		    (mesh_event_routing_table_change_t *)event_data;
-		ESP_LOGW(MESH_TAG,
-		         "<MESH_EVENT_ROUTING_TABLE_REMOVE> remove %d, new:%d, layer:%d",
-		         rt->rt_size_change, rt->rt_size_new, mesh_layer);
-	}
-	break;
-
-	case MESH_EVENT_NO_PARENT_FOUND: {
-		mesh_event_no_parent_found_t *np =
-		    (mesh_event_no_parent_found_t *)event_data;
-		ESP_LOGI(MESH_TAG,
-		         "<MESH_EVENT_NO_PARENT_FOUND> scan times:%d",
-		         np->scan_times);
-	}
-	break;
-
-	case MESH_EVENT_PARENT_CONNECTED: {
-		mesh_event_connected_t *conn =
-		    (mesh_event_connected_t *)event_data;
-		esp_mesh_get_id(&id);
-		mesh_layer = conn->self_layer;
-		memcpy(mesh_parent_addr.addr, conn->connected.bssid, 6);
-
-		mesh_log_stream_on_mesh_connected();
-
-		ESP_LOGI(MESH_TAG,
-		         "<MESH_EVENT_PARENT_CONNECTED> layer:%d -> %d, parent:" MACSTR
-		         " %s, ID:" MACSTR ", duty:%d",
-		         last_layer, mesh_layer,
-		         MAC2STR(mesh_parent_addr.addr),
-		         esp_mesh_is_root() ? "<ROOT>" :
-		         (mesh_layer == 2) ? "<layer2>" : "",
-		         MAC2STR(id.addr),
-		         conn->duty);
-		last_layer = mesh_layer;
-		is_mesh_connected = true;
-
-		if (esp_mesh_is_root()) {
-			esp_netif_dhcpc_stop(netif_sta);
-			esp_netif_dhcpc_start(netif_sta);
+		if (!s_parent_connected) {
+			if (s_unhealthy_since_ms == 0) s_unhealthy_since_ms = now;
+			uint32_t down_ms = now - s_unhealthy_since_ms;
+			if (down_ms >= RECOVERY_ACTION_BACKOFF_MS &&
+			    (s_last_soft_reconnect_ms == 0 ||
+			     now - s_last_soft_reconnect_ms >= RECOVERY_ACTION_BACKOFF_MS) &&
+			    !keemash_mesh_ota_receiver_active()) {
+				s_last_soft_reconnect_ms = now;
+				s_soft_reconnect_count++;
+				s_last_recovery_reason = MESH_V2_RECOVERY_REASON_SOFT_RECONNECT;
+				s_last_recovery_action_ms = now;
+				(void)esp_mesh_connect();
+			}
+			if (down_ms >= RECOVERY_RESTART_MS &&
+			    !keemash_mesh_ota_receiver_active() && !s_mesh_recovering) {
+				s_recovery_phase = RECOVERY_MESH_RESTART;
+				s_mesh_restart_count++;
+				s_last_recovery_reason = MESH_V2_RECOVERY_REASON_MESH_RESTART;
+				s_last_recovery_action_ms = now;
+				esp_err_t err = full_mesh_restart();
+				ESP_LOGW(TAG, "mesh recovery restart: %s", esp_err_to_name(err));
+				s_unhealthy_since_ms = tick_ms();
+				s_last_soft_reconnect_ms = 0;
+			}
+			continue;
 		}
-		mesh_comm_start();
-	}
-	break;
 
+		if (mesh_v2_node_ack_fresh(ACK_FRESH_MS)) {
+			if (s_recovery_phase != RECOVERY_OK) {
+				ESP_LOGI(TAG, "reliable root handshake restored");
+			}
+			s_recovery_phase = RECOVERY_OK;
+			s_unhealthy_since_ms = 0;
+			s_last_recovery_reason = MESH_V2_RECOVERY_REASON_NONE;
+			s_last_soft_reconnect_ms = 0;
+			if (!s_telemetry_synced) {
+				s_telemetry_synced = true;
+				send_telemetry_burst();
+			}
+			continue;
+		}
+
+		if (s_unhealthy_since_ms == 0) {
+			s_unhealthy_since_ms = now;
+			s_ack_stale_count++;
+		}
+		uint32_t down_ms = now - s_unhealthy_since_ms;
+		s_recovery_phase = RECOVERY_WAIT_ACK;
+		if (mesh_log_stream_tx_accepted_age_ms() < ACK_FRESH_MS) s_tx_without_ack_count++;
+
+		if (s_last_burst_ms == 0 || now - s_last_burst_ms >= RECOVERY_BURST_MS) {
+			s_last_burst_ms = now;
+			request_root_resync();
+		}
+		if (down_ms >= RECOVERY_RECONNECT_MS &&
+		    (s_last_soft_reconnect_ms == 0 ||
+		     now - s_last_soft_reconnect_ms >= RECOVERY_ACTION_BACKOFF_MS) &&
+		    !keemash_mesh_ota_receiver_active()) {
+			s_last_soft_reconnect_ms = now;
+			s_recovery_phase = RECOVERY_RECONNECT;
+			s_soft_reconnect_count++;
+			s_last_recovery_reason = MESH_V2_RECOVERY_REASON_SOFT_RECONNECT;
+			s_last_recovery_action_ms = now;
+			(void)esp_mesh_disconnect();
+			vTaskDelay(pdMS_TO_TICKS(250));
+			(void)esp_mesh_connect();
+		}
+		if (s_last_recovery_log_ms == 0 || now - s_last_recovery_log_ms >= RECOVERY_LOG_MS) {
+			s_last_recovery_log_ms = now;
+			ESP_LOGW(TAG, "root recovery phase=%u down=%lu ack_age=%lu last_tx=%s",
+				 (unsigned)s_recovery_phase, (unsigned long)down_ms,
+				 (unsigned long)mesh_v2_node_ack_age_ms(),
+				 esp_err_to_name(mesh_log_stream_last_send_err()));
+		}
+	}
+}
+
+static void mesh_rx_task(void *arg)
+{
+	(void)arg;
+	uint8_t rx_buffer[RX_SIZE];
+	mesh_data_t data = {.data = rx_buffer, .size = sizeof(rx_buffer)};
+	mesh_addr_t from;
+	int flags = 0;
+
+	while (s_running) {
+		data.size = sizeof(rx_buffer);
+		esp_err_t err = esp_mesh_recv(&from, &data, portMAX_DELAY, &flags, NULL, 0);
+		if (err != ESP_OK) {
+			if (!s_mesh_recovering) ESP_LOGW(TAG, "mesh RX failed: %s", esp_err_to_name(err));
+			continue;
+		}
+		if (data.size < sizeof(mesh_pkt_hdr_t)) continue;
+
+		const mesh_pkt_hdr_t *header = (const mesh_pkt_hdr_t *)rx_buffer;
+		if (header->magic != MESH_PKT_MAGIC) continue;
+		if (header->version == MESH_PKT_VERSION_V2) {
+			(void)mesh_v2_node_handle_rx(from.addr, rx_buffer, data.size);
+			continue;
+		}
+		if (header->version != MESH_PKT_VERSION) continue;
+
+		switch (header->type) {
+		case MESH_TIME_SYNC_TYPE_TIME:
+			(void)mesh_time_sync_handle_rx(rx_buffer, data.size);
+			break;
+		case MESH_LOG_TYPE_CTRL:
+			(void)mesh_log_stream_handle_rx(rx_buffer, data.size);
+			break;
+		case MESH_PKT_TYPE_TEXT:
+			if (data.size >= sizeof(mesh_packet_t)) {
+				const mesh_packet_t *packet = (const mesh_packet_t *)rx_buffer;
+				char text[sizeof(packet->payload)];
+				memcpy(text, packet->payload, sizeof(text));
+				text[sizeof(text) - 1] = '\0';
+				legacy_handle_text(text);
+			}
+			break;
+		case MESH_OTA_TYPE_BEGIN:
+		case MESH_OTA_TYPE_DATA:
+		case MESH_OTA_TYPE_END:
+		case MESH_OTA_TYPE_ABORT:
+			(void)keemash_mesh_ota_receiver_handle_rx(rx_buffer, data.size);
+			break;
+		default:
+			break;
+		}
+	}
+	vTaskDelete(NULL);
+}
+
+static void on_parent_connected(const mesh_event_connected_t *connected)
+{
+	s_layer = connected->self_layer;
+	memcpy(s_parent_addr.addr, connected->connected.bssid, sizeof(s_parent_addr.addr));
+	s_parent_connected = true;
+	s_telemetry_synced = false;
+	s_unhealthy_since_ms = tick_ms();
+	mesh_v2_link_parent_connected();
+	update_topology();
+	update_diagnostics();
+	ESP_LOGI(TAG, "parent connected layer=%d parent=" MACSTR,
+		 s_layer, MAC2STR(s_parent_addr.addr));
+}
+
+static void mesh_event_handler(void *arg, esp_event_base_t base,
+			       int32_t event_id, void *event_data)
+{
+	(void)arg;
+	(void)base;
+	switch (event_id) {
+	case MESH_EVENT_STARTED:
+		s_mesh_started = true;
+		ESP_LOGI(TAG, "mesh started");
+		break;
+	case MESH_EVENT_STOPPED:
+		s_mesh_started = false;
+		s_parent_connected = false;
+		s_telemetry_synced = false;
+		mesh_v2_link_parent_disconnected();
+		ESP_LOGW(TAG, "mesh stopped");
+		break;
+	case MESH_EVENT_CHILD_CONNECTED:
+	case MESH_EVENT_CHILD_DISCONNECTED:
+	case MESH_EVENT_ROUTING_TABLE_ADD:
+	case MESH_EVENT_ROUTING_TABLE_REMOVE:
+		update_topology();
+		if (s_parent_connected) (void)mesh_v2_node_send_topology();
+		break;
+	case MESH_EVENT_PARENT_CONNECTED:
+		on_parent_connected((const mesh_event_connected_t *)event_data);
+		break;
 	case MESH_EVENT_PARENT_DISCONNECTED: {
-		mesh_event_disconnected_t *disc =
-		    (mesh_event_disconnected_t *)event_data;
-		ESP_LOGI(MESH_TAG,
-		         "<MESH_EVENT_PARENT_DISCONNECTED> reason:%d",
-		         disc->reason);
-		is_mesh_connected = false;
-		mesh_layer = esp_mesh_get_layer();
+		const mesh_event_disconnected_t *event = event_data;
+		s_parent_connected = false;
+		s_parent_disconnect_count++;
+		s_last_parent_disconnect_reason = (uint8_t)event->reason;
+		s_last_recovery_reason = MESH_V2_RECOVERY_REASON_PARENT_DISC;
+		s_unhealthy_since_ms = tick_ms();
+		mesh_v2_link_parent_disconnected();
+		mesh_log_stream_clear_tx_accepted();
+		ESP_LOGW(TAG, "parent disconnected reason=%d", event->reason);
+		break;
 	}
-	break;
-
-	case MESH_EVENT_LAYER_CHANGE: {
-		mesh_event_layer_change_t *lc =
-		    (mesh_event_layer_change_t *)event_data;
-		mesh_layer = lc->new_layer;
-		ESP_LOGI(MESH_TAG,
-		         "<MESH_EVENT_LAYER_CHANGE> layer:%d -> %d %s",
-		         last_layer, mesh_layer,
-		         esp_mesh_is_root() ? "<ROOT>" :
-		         (mesh_layer == 2) ? "<layer2>" : "");
-		last_layer = mesh_layer;
+	case MESH_EVENT_NO_PARENT_FOUND: {
+		const mesh_event_no_parent_found_t *event = event_data;
+		s_no_parent_count++;
+		s_last_recovery_reason = MESH_V2_RECOVERY_REASON_NO_PARENT;
+		if (s_unhealthy_since_ms == 0) s_unhealthy_since_ms = tick_ms();
+		ESP_LOGW(TAG, "no parent found scans=%d", event->scan_times);
+		break;
 	}
-	break;
-
+	case MESH_EVENT_LAYER_CHANGE:
+		s_layer = ((mesh_event_layer_change_t *)event_data)->new_layer;
+		update_topology();
+		(void)mesh_v2_node_send_topology();
+		break;
 	case MESH_EVENT_ROOT_ADDRESS: {
-		mesh_event_root_address_t *ra =
-		    (mesh_event_root_address_t *)event_data;
-		ESP_LOGI(MESH_TAG,
-		         "<MESH_EVENT_ROOT_ADDRESS> root:" MACSTR,
-		         MAC2STR(ra->addr));
+		const mesh_event_root_address_t *event = event_data;
+		bool changed = memcmp(s_root_mesh_addr.addr, event->addr,
+				      sizeof(s_root_mesh_addr.addr)) != 0;
+		if (changed) {
+			memcpy(s_root_mesh_addr.addr, event->addr, sizeof(s_root_mesh_addr.addr));
+			mesh_v2_node_set_root_mac(NULL);
+		}
+		ESP_LOGI(TAG, "root address=" MACSTR, MAC2STR(event->addr));
+		if (s_parent_connected && (changed || !mesh_v2_node_reliable_ready())) {
+			mesh_v2_node_kick_root();
+		}
+		break;
 	}
-	break;
-
-	case MESH_EVENT_TODS_STATE: {
-		mesh_event_toDS_state_t *st =
-		    (mesh_event_toDS_state_t *)event_data;
-		ESP_LOGI(MESH_TAG,
-		         "<MESH_EVENT_TODS_STATE> state:%d",
-		         *st);
-	}
-	break;
-
 	case MESH_EVENT_NETWORK_STATE: {
-		mesh_event_network_state_t *ns =
-		    (mesh_event_network_state_t *)event_data;
-		ESP_LOGI(MESH_TAG,
-		         "<MESH_EVENT_NETWORK_STATE> is_rootless:%d",
-		         ns->is_rootless);
+		const mesh_event_network_state_t *event = event_data;
+		if (event->is_rootless) {
+			s_rootless_count++;
+			s_last_recovery_reason = MESH_V2_RECOVERY_REASON_ROOTLESS;
+			s_unhealthy_since_ms = tick_ms();
+			s_telemetry_synced = false;
+			mesh_v2_node_set_root_mac(NULL);
+			if (s_parent_connected) mesh_v2_node_kick_root();
+		}
+		break;
 	}
-	break;
-
 	default:
-		ESP_LOGI(MESH_TAG,
-		         "unknown mesh event id:%" PRId32,
-		         event_id);
 		break;
 	}
 }
 
-/* -------------------------------------------------------------------------- */
-/*  app_main – ініціалізація mesh + Wi-Fi                                     */
-/* -------------------------------------------------------------------------- */
+static esp_err_t init_nvs(void)
+{
+	esp_err_t err = nvs_flash_init();
+	if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+		ESP_LOGW(TAG, "NVS requires recovery erase: %s", esp_err_to_name(err));
+		err = nvs_flash_erase();
+		if (err == ESP_OK) err = nvs_flash_init();
+	}
+	return err;
+}
+
+static esp_err_t application_init(void)
+{
+	esp_err_t relay_err = humid_ctrl_init();
+	esp_err_t led_err = water_led_init();
+	esp_err_t pms_err = pms5003_start(5);
+	s_application_healthy =
+		relay_err == ESP_OK && led_err == ESP_OK && pms_err == ESP_OK;
+	if (!s_application_healthy) {
+		ESP_LOGE(TAG, "application degraded relay=%s led=%s pms=%s",
+			 esp_err_to_name(relay_err), esp_err_to_name(led_err),
+			 esp_err_to_name(pms_err));
+		return relay_err != ESP_OK ? relay_err :
+		       led_err != ESP_OK ? led_err : pms_err;
+	}
+	ESP_LOGI(TAG, "application modules ready before mesh startup");
+	return ESP_OK;
+}
+
+static esp_err_t ensure_mesh_tasks(void)
+{
+	if (!s_mesh_rx_task &&
+	    xTaskCreate(mesh_rx_task, "mesh_rx", 6144, NULL, 6,
+			&s_mesh_rx_task) != pdPASS) {
+		return ESP_ERR_NO_MEM;
+	}
+	if (!s_recovery_task &&
+	    xTaskCreate(recovery_task, "mesh_recovery", 4096, NULL, 5,
+			&s_recovery_task) != pdPASS) {
+		return ESP_ERR_NO_MEM;
+	}
+	return ESP_OK;
+}
+
+static esp_err_t try_start_mesh(void)
+{
+	esp_err_t err;
+	if (!s_mesh_initialized) {
+		err = esp_mesh_init();
+		if (err != ESP_OK) return err;
+		s_mesh_initialized = true;
+	}
+	if (!s_mesh_event_registered) {
+		err = esp_event_handler_register(MESH_EVENT, ESP_EVENT_ANY_ID,
+						 mesh_event_handler, NULL);
+		if (err != ESP_OK) return err;
+		s_mesh_event_registered = true;
+	}
+	if (!s_mesh_started) {
+		err = configure_mesh();
+		if (err != ESP_OK) return err;
+		err = esp_mesh_start();
+		if (err != ESP_OK) return err;
+		s_mesh_started = true;
+	}
+	return ensure_mesh_tasks();
+}
+
+static void startup_retry_task(void *argument)
+{
+	(void)argument;
+	for (;;) {
+		vTaskDelay(pdMS_TO_TICKS(10000));
+		esp_err_t err = esp_wifi_start();
+		if (err == ESP_OK || err == ESP_ERR_INVALID_STATE) {
+			err = try_start_mesh();
+		}
+		if (err == ESP_OK) {
+			ESP_LOGI(TAG, "mesh startup recovered");
+			s_startup_retry_task = NULL;
+			vTaskDelete(NULL);
+		}
+		ESP_LOGW(TAG, "mesh startup retry failed: %s", esp_err_to_name(err));
+	}
+}
+
+static void detect_rollback_state(void)
+{
+	const esp_partition_t *running = esp_ota_get_running_partition();
+	esp_ota_img_states_t state;
+	if (running && esp_ota_get_state_partition(running, &state) == ESP_OK &&
+	    state == ESP_OTA_IMG_PENDING_VERIFY) {
+		s_rollback_pending = true;
+		ESP_LOGW(TAG, "OTA rollback pending until reliable root handshake");
+	}
+}
 
 void app_main(void)
 {
-	ESP_ERROR_CHECK(nvs_flash_init());
-	ESP_ERROR_CHECK(esp_netif_init());
-	ESP_ERROR_CHECK(esp_event_loop_create_default());
+	esp_err_t application_error = application_init();
+	if (application_error != ESP_OK) {
+		ESP_LOGW(TAG, "continuing with network diagnostics in degraded mode");
+	}
+	detect_rollback_state();
+	esp_err_t err = init_nvs();
+	if (err != ESP_OK) {
+		ESP_LOGE(TAG, "NVS init failed: %s", esp_err_to_name(err));
+		return;
+	}
+	err = esp_netif_init();
+	if (err != ESP_OK) {
+		ESP_LOGE(TAG, "netif init failed: %s", esp_err_to_name(err));
+		return;
+	}
+	err = esp_event_loop_create_default();
+	if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+		ESP_LOGE(TAG, "event loop init failed: %s", esp_err_to_name(err));
+		return;
+	}
+	err = esp_netif_create_default_wifi_mesh_netifs(&s_netif_sta, NULL);
+	if (err != ESP_OK) {
+		ESP_LOGE(TAG, "mesh netif init failed: %s", esp_err_to_name(err));
+		return;
+	}
 
-	// Створюємо netif для mesh (sta + softAP, але зберігаємо тільки sta)
-	ESP_ERROR_CHECK(
-	    esp_netif_create_default_wifi_mesh_netifs(&netif_sta, NULL));
+	wifi_init_config_t wifi_config = WIFI_INIT_CONFIG_DEFAULT();
+	err = esp_wifi_init(&wifi_config);
+	if (err != ESP_OK) {
+		ESP_LOGE(TAG, "Wi-Fi init failed: %s", esp_err_to_name(err));
+		return;
+	}
+	err = esp_wifi_set_storage(WIFI_STORAGE_FLASH);
+	if (err != ESP_OK) {
+		ESP_LOGE(TAG, "Wi-Fi storage setup failed: %s", esp_err_to_name(err));
+		return;
+	}
+	err = esp_wifi_start();
+	if (err != ESP_OK) {
+		ESP_LOGW(TAG, "initial Wi-Fi start failed: %s", esp_err_to_name(err));
+	}
 
-	// Wi-Fi
-	wifi_init_config_t wifi_cfg = WIFI_INIT_CONFIG_DEFAULT();
-	ESP_ERROR_CHECK(esp_wifi_init(&wifi_cfg));
-	ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_FLASH));
-	ESP_ERROR_CHECK(esp_wifi_start());
-
-	// MESH
-	ESP_ERROR_CHECK(esp_mesh_init());
-	ESP_ERROR_CHECK(
-	    esp_event_handler_register(MESH_EVENT, ESP_EVENT_ANY_ID,
-	                               &mesh_event_handler, NULL));
-        // Звичайний вузол, root’ом не стає
-    ESP_ERROR_CHECK(esp_mesh_fix_root(false));      // можна й не викликати, але так явно
-
-	ESP_ERROR_CHECK(esp_mesh_set_topology(CONFIG_MESH_TOPOLOGY));
-	ESP_ERROR_CHECK(esp_mesh_set_max_layer(CONFIG_MESH_MAX_LAYER));
-	ESP_ERROR_CHECK(esp_mesh_set_vote_percentage(1));
-	ESP_ERROR_CHECK(esp_mesh_set_xon_qsize(128));
-
-	ESP_ERROR_CHECK(esp_mesh_disable_ps());
-	ESP_ERROR_CHECK(esp_mesh_set_ap_assoc_expire(10));
-
-
-	mesh_cfg_t cfg = MESH_INIT_CONFIG_DEFAULT();
-
-	// mesh_id
-	memcpy(cfg.mesh_id.addr, MESH_ID, 6);
-
-	// роутер (твій домашній Wi-Fi з menuconfig)
-	cfg.channel        = CONFIG_MESH_CHANNEL;
-	cfg.router.ssid_len = strlen(CONFIG_MESH_ROUTER_SSID);
-	memcpy(cfg.router.ssid,
-	       CONFIG_MESH_ROUTER_SSID,
-	       cfg.router.ssid_len);
-	memcpy(cfg.router.password,
-	       CONFIG_MESH_ROUTER_PASSWD,
-	       strlen(CONFIG_MESH_ROUTER_PASSWD));
-
-	// mesh AP (для дітей)
-	ESP_ERROR_CHECK(esp_mesh_set_ap_authmode(CONFIG_MESH_AP_AUTHMODE));
-	cfg.mesh_ap.max_connection        = CONFIG_MESH_AP_CONNECTIONS;
-	cfg.mesh_ap.nonmesh_max_connection = CONFIG_MESH_NON_MESH_AP_CONNECTIONS;
-	memcpy(cfg.mesh_ap.password,
-	       CONFIG_MESH_AP_PASSWD,
-	       strlen(CONFIG_MESH_AP_PASSWD));
-
-	ESP_ERROR_CHECK(esp_mesh_set_config(&cfg));
-
-	ESP_ERROR_CHECK(esp_mesh_start());
-
-	water_led_init();
-
-	ESP_LOGI(MESH_TAG,
-	         "mesh started, heap:%" PRId32 ", root_fixed:%d, topo:%d %s, ps:%d",
-	         esp_get_minimum_free_heap_size(),
-	         esp_mesh_is_root_fixed(),
-	         esp_mesh_get_topology(),
-	         esp_mesh_get_topology() ? "(chain)" : "(tree)",
-	         esp_mesh_is_ps_enabled());
-	
+	err = keemash_log_time_vprintf_start();
+	if (err != ESP_OK) {
+		ESP_LOGW(TAG, "timestamp log hook unavailable: %s", esp_err_to_name(err));
+	}
 	mesh_time_sync_init();
-	log_time_vprintf_start();
-	mesh_log_stream_init(MESH_TAG);
-      
+	s_boot_seq = esp_random();
+	err = mesh_v2_link_init(TAG, HUMIDIFIER_RELAY_ELIGIBLE);
+	if (err != ESP_OK) {
+		ESP_LOGE(TAG, "mesh transport init failed: %s", esp_err_to_name(err));
+		return;
+	}
+	err = keemash_mesh_ota_receiver_start();
+	if (err != ESP_OK) {
+		ESP_LOGE(TAG, "OTA receiver init failed: %s", esp_err_to_name(err));
+		return;
+	}
+
+	err = try_start_mesh();
+	if (err != ESP_OK) {
+		ESP_LOGW(TAG, "mesh startup failed: %s", esp_err_to_name(err));
+		if (xTaskCreate(startup_retry_task, "mesh_start_retry", 3072, NULL, 4,
+				&s_startup_retry_task) != pdPASS) {
+			ESP_LOGE(TAG, "failed to create mesh startup retry task");
+		}
+	}
+
+	const esp_partition_t *running = esp_ota_get_running_partition();
+	ESP_LOGI(TAG,
+		 "ready idf=%s app=%s slot=%s flash=%s app_ok=%u relay=%u ps=%u",
+		 esp_get_idf_version(), esp_app_get_description()->version,
+		 running ? running->label : "?", CONFIG_ESPTOOLPY_FLASHSIZE,
+		 s_application_healthy ? 1U : 0U,
+		 HUMIDIFIER_RELAY_ELIGIBLE ? 1U : 0U,
+		 esp_mesh_is_ps_enabled() ? 1U : 0U);
 }

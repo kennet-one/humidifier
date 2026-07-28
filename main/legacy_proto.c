@@ -7,6 +7,7 @@
 #include "esp_log.h"
 
 #include "humid_ctrl.h"
+#include "legacy_root_sender.h"
 #include "pms5003_node.h"
 #include "water_led.h"
 
@@ -53,5 +54,10 @@ void legacy_handle_text(const char *text)
 	}
 	if (err != ESP_OK) {
 		ESP_LOGW(TAG, "command \"%s\" failed: %s", text, esp_err_to_name(err));
+		if (strcmp(result, "power_off") == 0) {
+			(void)legacy_send_to_root("ERR:POWER_OFF:humidifier");
+		} else {
+			(void)legacy_send_to_root("ERR:REJECTED:humidifier");
+		}
 	}
 }

@@ -5,6 +5,7 @@ idf_component_register(
         "../../../main/humid_ctrl.c"
         "../../../main/legacy_proto.c"
     INCLUDE_DIRS
+        "."
         "../../../main"
     REQUIRES
         unity

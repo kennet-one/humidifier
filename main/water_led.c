@@ -123,11 +123,29 @@ esp_err_t water_led_init(void)
 	return err;
 }
 
-static esp_err_t set_state(uint8_t mode, uint8_t brightness)
+static esp_err_t set_mode(uint8_t mode)
 {
 	if (!s_lock || xSemaphoreTake(s_lock, pdMS_TO_TICKS(200)) != pdTRUE) {
 		return ESP_ERR_TIMEOUT;
 	}
+	uint8_t brightness = s_status.brightness;
+	esp_err_t err = apply(mode, brightness);
+	if (err == ESP_OK) {
+		s_status.mode = mode;
+		s_status.brightness = brightness;
+		s_status.initialized = true;
+	}
+	s_status.last_error = err;
+	xSemaphoreGive(s_lock);
+	return err;
+}
+
+static esp_err_t set_brightness(uint8_t brightness)
+{
+	if (!s_lock || xSemaphoreTake(s_lock, pdMS_TO_TICKS(200)) != pdTRUE) {
+		return ESP_ERR_TIMEOUT;
+	}
+	uint8_t mode = s_status.mode;
 	esp_err_t err = apply(mode, brightness);
 	if (err == ESP_OK) {
 		s_status.mode = mode;
@@ -155,9 +173,9 @@ esp_err_t water_led_echo_all(void)
 	water_led_get_status(&status);
 	char reply[16];
 	brightness_reply(status.brightness, reply);
-	(void)legacy_send_to_root(reply);
+	(void)legacy_send_state_to_root("led_level", reply);
 	mode_reply(status.mode, reply);
-	(void)legacy_send_to_root(reply);
+	(void)legacy_send_state_to_root("led_mode", reply);
 	return status.last_error;
 }
 
@@ -167,18 +185,15 @@ bool water_led_handle_command(const char *text, esp_err_t *command_error,
 	if (command_error) *command_error = ESP_OK;
 	if (!text) return false;
 	size_t length = strlen(text);
-	water_led_status_t status;
-	water_led_get_status(&status);
-
 	if (length == 3 && text[0] == '1' && text[1] == '8' &&
 	    text[2] >= '0' && text[2] <= '3') {
 		uint8_t mode = (uint8_t)(text[2] - '0');
-		esp_err_t err = set_state(mode, status.brightness);
+		esp_err_t err = set_mode(mode);
 		if (command_error) *command_error = err;
 		char reply[8];
 		if (err == ESP_OK) {
 			mode_reply(mode, reply);
-			(void)legacy_send_to_root(reply);
+			(void)legacy_send_state_to_root("led_mode", reply);
 			copy_result(result, result_size, reply);
 		} else {
 			copy_result(result, result_size, esp_err_to_name(err));
@@ -197,12 +212,12 @@ bool water_led_handle_command(const char *text, esp_err_t *command_error,
 		} else {
 			return false;
 		}
-		esp_err_t err = set_state(status.mode, brightness);
+		esp_err_t err = set_brightness(brightness);
 		if (command_error) *command_error = err;
 		char reply[16];
 		if (err == ESP_OK) {
 			brightness_reply(brightness, reply);
-			(void)legacy_send_to_root(reply);
+			(void)legacy_send_state_to_root("led_level", reply);
 			copy_result(result, result_size, reply);
 		} else {
 			copy_result(result, result_size, esp_err_to_name(err));

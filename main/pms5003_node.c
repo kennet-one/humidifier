@@ -132,13 +132,14 @@ static esp_err_t pms_read_frame(uint8_t *output, size_t output_size,
 
 static void publish_values(uint16_t pm1, uint16_t pm25, uint16_t pm10)
 {
-	char text[32];
-	snprintf(text, sizeof(text), "10%u", (unsigned)pm1);
-	(void)legacy_send_to_root(text);
-	snprintf(text, sizeof(text), "11%u", (unsigned)pm25);
-	(void)legacy_send_to_root(text);
-	snprintf(text, sizeof(text), "12%u", (unsigned)pm10);
-	(void)legacy_send_to_root(text);
+	char pm1_text[32];
+	char pm25_text[32];
+	char pm10_text[32];
+	snprintf(pm1_text, sizeof(pm1_text), "10%u", (unsigned)pm1);
+	snprintf(pm25_text, sizeof(pm25_text), "11%u", (unsigned)pm25);
+	snprintf(pm10_text, sizeof(pm10_text), "12%u", (unsigned)pm10);
+	const char *group[] = {pm1_text, pm25_text, pm10_text};
+	(void)legacy_send_group_to_root(group, 3);
 }
 
 static void finish_measurement(esp_err_t err, bool values_valid, uint16_t pm1,
@@ -207,8 +208,8 @@ static void pms_task(void *argument)
 		} else {
 			char text[32];
 			snprintf(text, sizeof(text), "pm1_e%X", (unsigned)err);
-			(void)legacy_send_to_root(text);
-			(void)legacy_send_to_root("pm1_fail");
+			const char *group[] = {text, "pm1_fail"};
+			(void)legacy_send_group_to_root(group, 2);
 			ESP_LOGW(TAG, "measurement failed: %s", esp_err_to_name(err));
 		}
 

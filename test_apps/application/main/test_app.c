@@ -10,6 +10,7 @@
 
 #include "humid_ctrl.h"
 #include "legacy_proto.h"
+#include "mesh_security.h"
 #include "pms5003_node.h"
 #include "relay_block_pca8574.h"
 #include "water_led.h"
@@ -34,6 +35,21 @@ bool legacy_send_to_root(const char *text)
 	if (!text || s_event_count >= 16) return false;
 	snprintf(s_events[s_event_count], sizeof(s_events[s_event_count]), "%s", text);
 	s_event_count++;
+	return true;
+}
+
+bool legacy_send_state_to_root(const char *key, const char *text)
+{
+	(void)key;
+	return legacy_send_to_root(text);
+}
+
+bool legacy_send_group_to_root(const char *const *texts, size_t count)
+{
+	if (!texts || count == 0 || s_event_count + count > 16) return false;
+	for (size_t i = 0; i < count; i++) {
+		if (!legacy_send_to_root(texts[i])) return false;
+	}
 	return true;
 }
 
@@ -169,6 +185,8 @@ static void test_fan_and_power_transitions_use_complete_shadow(void)
 	esp_err_t err = ESP_OK;
 	char result[32] = {0};
 
+	TEST_ASSERT_TRUE(legacy_handle_command("huOn", &err, result, sizeof(result)));
+	TEST_ASSERT_EQUAL(ESP_OK, err);
 	TEST_ASSERT_TRUE(legacy_handle_command("141", &err, result, sizeof(result)));
 	TEST_ASSERT_EQUAL(ESP_OK, err);
 	TEST_ASSERT_BITS_HIGH((uint8_t)(1U << 4), s_relay_shadow);
@@ -179,8 +197,6 @@ static void test_fan_and_power_transitions_use_complete_shadow(void)
 	TEST_ASSERT_BITS_LOW((uint8_t)(1U << 4), s_relay_shadow);
 	TEST_ASSERT_BITS_HIGH((uint8_t)(1U << 5), s_relay_shadow);
 
-	TEST_ASSERT_TRUE(legacy_handle_command("huOn", &err, result, sizeof(result)));
-	TEST_ASSERT_EQUAL_STRING("151000", result);
 	humid_ctrl_status_t on;
 	humid_ctrl_get_status(&on);
 	TEST_ASSERT_TRUE(on.power_on);
@@ -195,6 +211,25 @@ static void test_fan_and_power_transitions_use_complete_shadow(void)
 	humid_ctrl_get_status(&off);
 	TEST_ASSERT_FALSE(off.power_on);
 	TEST_ASSERT_EQUAL_HEX8(0xff, off.relay_shadow);
+}
+
+static void test_turbo_rejected_while_power_is_off(void)
+{
+	init_controller();
+	humid_ctrl_status_t before;
+	humid_ctrl_get_status(&before);
+	uint8_t hardware_before = s_relay_shadow;
+
+	esp_err_t err = ESP_OK;
+	char result[32] = {0};
+	TEST_ASSERT_TRUE(legacy_handle_command("143", &err, result, sizeof(result)));
+	TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, err);
+	TEST_ASSERT_EQUAL_STRING("power_off", result);
+
+	humid_ctrl_status_t after;
+	humid_ctrl_get_status(&after);
+	TEST_ASSERT_EQUAL_MEMORY(&before, &after, sizeof(before));
+	TEST_ASSERT_EQUAL_HEX8(hardware_before, s_relay_shadow);
 }
 
 static void test_dispatch_rejects_malformed_and_reports_pms_busy(void)
@@ -224,13 +259,28 @@ static void test_dispatch_rejects_malformed_and_reports_pms_busy(void)
 	TEST_ASSERT_EQUAL_STRING("pm1 busy", result);
 }
 
+static void test_v1_origin_policy_is_root_bound_and_sticky(void)
+{
+	const uint8_t root[6] = {0x10, 0x20, 0x30, 0x40, 0x50, 0x60};
+	const uint8_t other[6] = {0x10, 0x20, 0x30, 0x40, 0x50, 0x61};
+	const uint8_t zero[6] = {0};
+
+	TEST_ASSERT_TRUE(humidifier_v1_origin_allowed(root, root, root, false));
+	TEST_ASSERT_FALSE(humidifier_v1_origin_allowed(root, other, root, false));
+	TEST_ASSERT_FALSE(humidifier_v1_origin_allowed(other, other, root, false));
+	TEST_ASSERT_FALSE(humidifier_v1_origin_allowed(root, root, zero, false));
+	TEST_ASSERT_FALSE(humidifier_v1_origin_allowed(root, root, root, true));
+}
+
 void app_main(void)
 {
 	UNITY_BEGIN();
 	RUN_TEST(test_safe_initial_state);
 	RUN_TEST(test_relay_state_changes_only_after_hardware_success);
 	RUN_TEST(test_fan_and_power_transitions_use_complete_shadow);
+	RUN_TEST(test_turbo_rejected_while_power_is_off);
 	RUN_TEST(test_dispatch_rejects_malformed_and_reports_pms_busy);
+	RUN_TEST(test_v1_origin_policy_is_root_bound_and_sticky);
 	int failures = UNITY_END();
 	printf("HUMIDIFIER_APPLICATION_TESTS:%s\n", failures == 0 ? "PASS" : "FAIL");
 	vTaskDelay(portMAX_DELAY);

@@ -56,17 +56,19 @@ static esp_err_t raw_mesh_send(void *user, const uint8_t destination_mac[6],
 
 esp_err_t mesh_v2_link_init(const char *tag, bool relay_eligible)
 {
-	if (s_tx_broker) return ESP_OK;
-	keemash_mesh_tx_broker_config_t config = {
-		.slots = 32,
-		.max_packet_size = 512,
-		.task_stack_words = 4608,
-		.task_priority = 7,
-		.task_name = "mesh_tx",
-		.raw_send = raw_mesh_send,
-	};
-	esp_err_t err = keemash_mesh_tx_broker_init(&s_tx_broker, &config);
-	if (err != ESP_OK) return err;
+	if (!s_tx_broker) {
+		keemash_mesh_tx_broker_config_t config = {
+			.slots = 32,
+			.control_reserved_slots = 4,
+			.max_packet_size = 512,
+			.task_stack_words = 4608,
+			.task_priority = 7,
+			.task_name = "mesh_tx",
+			.raw_send = raw_mesh_send,
+		};
+		esp_err_t err = keemash_mesh_tx_broker_init(&s_tx_broker, &config);
+		if (err != ESP_OK) return err;
+	}
 	mesh_v2_node_set_relay_eligible(relay_eligible);
 	mesh_v2_node_init(tag);
 	return keemash_mesh_log_stream_init(tag);

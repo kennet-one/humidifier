@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <inttypes.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -26,8 +27,10 @@
 #include "keemash_mesh_node.h"
 #include "keemash_mesh_ota_receiver.h"
 #include "legacy_proto.h"
+#include "legacy_root_sender.h"
 #include "mesh_log_stream.h"
 #include "mesh_proto.h"
+#include "mesh_security.h"
 #include "mesh_time_sync.h"
 #include "mesh_v2_link.h"
 #include "humid_ctrl.h"
@@ -59,38 +62,57 @@ typedef enum {
 static const char *TAG = "humidifier";
 static const uint8_t MESH_ID[6] = {0x77, 0x77, 0x77, 0x77, 0x77, 0x77};
 
-static volatile bool s_running = true;
-static volatile bool s_parent_connected;
-static volatile bool s_mesh_recovering;
+static _Atomic bool s_running = true;
+static _Atomic bool s_parent_connected;
+static _Atomic bool s_mesh_recovering;
 static esp_netif_t *s_netif_sta;
 static mesh_addr_t s_parent_addr;
 static mesh_addr_t s_root_mesh_addr;
-static int s_layer = -1;
-static uint32_t s_unhealthy_since_ms;
-static uint32_t s_last_burst_ms;
-static uint32_t s_last_recovery_log_ms;
-static uint32_t s_last_recovery_action_ms;
-static uint32_t s_last_soft_reconnect_ms;
-static uint32_t s_boot_seq;
-static uint16_t s_parent_disconnect_count;
-static uint16_t s_no_parent_count;
-static uint16_t s_rootless_count;
-static uint16_t s_soft_reconnect_count;
-static uint16_t s_mesh_restart_count;
-static uint16_t s_ack_stale_count;
-static uint16_t s_tx_without_ack_count;
-static uint8_t s_last_parent_disconnect_reason;
-static uint8_t s_last_recovery_reason;
-static recovery_phase_t s_recovery_phase = RECOVERY_OK;
-static bool s_rollback_pending;
-static bool s_telemetry_synced;
+static portMUX_TYPE s_runtime_lock = portMUX_INITIALIZER_UNLOCKED;
+static _Atomic int s_layer = -1;
+static _Atomic uint32_t s_unhealthy_since_ms;
+static _Atomic uint32_t s_last_burst_ms;
+static _Atomic uint32_t s_last_recovery_log_ms;
+static _Atomic uint32_t s_last_recovery_action_ms;
+static _Atomic uint32_t s_last_soft_reconnect_ms;
+static _Atomic uint32_t s_boot_seq;
+static _Atomic uint16_t s_parent_disconnect_count;
+static _Atomic uint16_t s_no_parent_count;
+static _Atomic uint16_t s_rootless_count;
+static _Atomic uint16_t s_soft_reconnect_count;
+static _Atomic uint16_t s_mesh_restart_count;
+static _Atomic uint16_t s_ack_stale_count;
+static _Atomic uint16_t s_tx_without_ack_count;
+static _Atomic uint8_t s_last_parent_disconnect_reason;
+static _Atomic uint8_t s_last_recovery_reason;
+static _Atomic recovery_phase_t s_recovery_phase = RECOVERY_OK;
+static _Atomic bool s_rollback_pending;
+static _Atomic bool s_telemetry_synced;
 static bool s_application_healthy;
-static bool s_mesh_initialized;
-static bool s_mesh_event_registered;
-static bool s_mesh_started;
+static _Atomic bool s_mesh_initialized;
+static _Atomic bool s_mesh_event_registered;
+static _Atomic bool s_mesh_started;
 static TaskHandle_t s_mesh_rx_task;
 static TaskHandle_t s_recovery_task;
-static TaskHandle_t s_startup_retry_task;
+static TaskHandle_t s_network_supervisor_task;
+
+typedef enum {
+	NETWORK_STAGE_NVS = 0,
+	NETWORK_STAGE_NETIF,
+	NETWORK_STAGE_EVENT_LOOP,
+	NETWORK_STAGE_MESH_NETIFS,
+	NETWORK_STAGE_WIFI,
+	NETWORK_STAGE_WIFI_STORAGE,
+	NETWORK_STAGE_WIFI_START,
+	NETWORK_STAGE_LOG_TIME,
+	NETWORK_STAGE_LINK,
+	NETWORK_STAGE_OUTBOX,
+	NETWORK_STAGE_OTA,
+	NETWORK_STAGE_MESH,
+	NETWORK_STAGE_READY,
+} network_stage_t;
+
+static network_stage_t s_network_stage;
 
 static uint32_t tick_ms(void)
 {
@@ -152,14 +174,18 @@ static esp_err_t configure_mesh(void)
 static void update_topology(void)
 {
 	uint8_t root_mac[6] = {0};
+	uint8_t parent_mac[6] = {0};
 	(void)mesh_v2_node_get_root_mac(root_mac);
+	portENTER_CRITICAL(&s_runtime_lock);
+	memcpy(parent_mac, s_parent_addr.addr, sizeof(parent_mac));
+	portEXIT_CRITICAL(&s_runtime_lock);
 	wifi_ap_record_t parent = {0};
 	int8_t rssi = 0;
 	if (esp_wifi_sta_get_ap_info(&parent) == ESP_OK) rssi = parent.rssi;
 	int route_count = esp_mesh_get_routing_table_size();
 	uint8_t descendants = route_count > 255 ? 255 :
 			      route_count > 0 ? (uint8_t)route_count : 0;
-	mesh_v2_node_update_topology(s_parent_addr.addr, root_mac,
+	mesh_v2_node_update_topology(parent_mac, root_mac,
 				     s_layer > 0 ? (uint16_t)s_layer : 0,
 				     CONFIG_MESH_MAX_LAYER, rssi, descendants);
 }
@@ -308,6 +334,7 @@ static void recovery_task(void *arg)
 			request_root_resync();
 		}
 		if (down_ms >= RECOVERY_RECONNECT_MS &&
+		    mesh_v2_node_protocol_recovery_exhausted() &&
 		    (s_last_soft_reconnect_ms == 0 ||
 		     now - s_last_soft_reconnect_ms >= RECOVERY_ACTION_BACKOFF_MS) &&
 		    !keemash_mesh_ota_receiver_active()) {
@@ -354,6 +381,20 @@ static void mesh_rx_task(void *arg)
 			continue;
 		}
 		if (header->version != MESH_PKT_VERSION) continue;
+		uint8_t expected_root[6] = {0};
+		bool have_protocol_root = mesh_v2_node_get_root_mac(expected_root);
+		const uint8_t *root_identity = have_protocol_root
+			? expected_root : s_root_mesh_addr.addr;
+		bool have_root_identity = memcmp(root_identity,
+						 (const uint8_t[6]){0}, 6) != 0;
+		if (!have_root_identity ||
+		    !humidifier_v1_origin_allowed(
+			    from.addr, header->src_mac, root_identity,
+			    mesh_v2_node_lossless_negotiated())) {
+			ESP_LOGW(TAG, "rejected V1 type=%u from non-root " MACSTR,
+				 (unsigned)header->type, MAC2STR(from.addr));
+			continue;
+		}
 
 		switch (header->type) {
 		case MESH_TIME_SYNC_TYPE_TIME:
@@ -387,7 +428,9 @@ static void mesh_rx_task(void *arg)
 static void on_parent_connected(const mesh_event_connected_t *connected)
 {
 	s_layer = connected->self_layer;
+	portENTER_CRITICAL(&s_runtime_lock);
 	memcpy(s_parent_addr.addr, connected->connected.bssid, sizeof(s_parent_addr.addr));
+	portEXIT_CRITICAL(&s_runtime_lock);
 	s_parent_connected = true;
 	s_telemetry_synced = false;
 	s_unhealthy_since_ms = tick_ms();
@@ -452,11 +495,18 @@ static void mesh_event_handler(void *arg, esp_event_base_t base,
 		break;
 	case MESH_EVENT_ROOT_ADDRESS: {
 		const mesh_event_root_address_t *event = event_data;
+		portENTER_CRITICAL(&s_runtime_lock);
 		bool changed = memcmp(s_root_mesh_addr.addr, event->addr,
 				      sizeof(s_root_mesh_addr.addr)) != 0;
 		if (changed) {
+			bool had_root = memcmp(s_root_mesh_addr.addr,
+					      (const uint8_t[6]){0}, 6) != 0;
 			memcpy(s_root_mesh_addr.addr, event->addr, sizeof(s_root_mesh_addr.addr));
-			mesh_v2_node_set_root_mac(NULL);
+			portEXIT_CRITICAL(&s_runtime_lock);
+			if (had_root) mesh_v2_node_forget_root();
+			else mesh_v2_node_set_root_mac(NULL);
+		} else {
+			portEXIT_CRITICAL(&s_runtime_lock);
 		}
 		ESP_LOGI(TAG, "root address=" MACSTR, MAC2STR(event->addr));
 		if (s_parent_connected && (changed || !mesh_v2_node_reliable_ready())) {
@@ -549,22 +599,92 @@ static esp_err_t try_start_mesh(void)
 	return ensure_mesh_tasks();
 }
 
-static void startup_retry_task(void *argument)
+static esp_err_t network_start_step(void)
+{
+	esp_err_t err = ESP_OK;
+	switch (s_network_stage) {
+	case NETWORK_STAGE_NVS:
+		err = init_nvs();
+		break;
+	case NETWORK_STAGE_NETIF:
+		err = esp_netif_init();
+		if (err == ESP_ERR_INVALID_STATE) err = ESP_OK;
+		break;
+	case NETWORK_STAGE_EVENT_LOOP:
+		err = esp_event_loop_create_default();
+		if (err == ESP_ERR_INVALID_STATE) err = ESP_OK;
+		break;
+	case NETWORK_STAGE_MESH_NETIFS:
+		err = esp_netif_create_default_wifi_mesh_netifs(&s_netif_sta, NULL);
+		break;
+	case NETWORK_STAGE_WIFI: {
+		wifi_init_config_t wifi_config = WIFI_INIT_CONFIG_DEFAULT();
+		err = esp_wifi_init(&wifi_config);
+		break;
+	}
+	case NETWORK_STAGE_WIFI_STORAGE:
+		err = esp_wifi_set_storage(WIFI_STORAGE_FLASH);
+		break;
+	case NETWORK_STAGE_WIFI_START:
+		err = esp_wifi_start();
+		if (err == ESP_ERR_INVALID_STATE) err = ESP_OK;
+		break;
+	case NETWORK_STAGE_LOG_TIME:
+		err = keemash_log_time_vprintf_start();
+		if (err != ESP_OK) {
+			ESP_LOGW(TAG, "timestamp log hook unavailable: %s",
+				 esp_err_to_name(err));
+		}
+		mesh_time_sync_init();
+		err = ESP_OK;
+		break;
+	case NETWORK_STAGE_LINK:
+		err = mesh_v2_link_init(TAG, HUMIDIFIER_RELAY_ELIGIBLE);
+		break;
+	case NETWORK_STAGE_OUTBOX:
+		err = legacy_root_sender_start(4);
+		break;
+	case NETWORK_STAGE_OTA:
+		err = keemash_mesh_ota_receiver_start();
+		break;
+	case NETWORK_STAGE_MESH:
+		err = try_start_mesh();
+		break;
+	case NETWORK_STAGE_READY:
+		return ESP_OK;
+	}
+	if (err == ESP_OK) s_network_stage++;
+	return err;
+}
+
+static void network_supervisor_task(void *argument)
 {
 	(void)argument;
-	for (;;) {
-		vTaskDelay(pdMS_TO_TICKS(10000));
-		esp_err_t err = esp_wifi_start();
-		if (err == ESP_OK || err == ESP_ERR_INVALID_STATE) {
-			err = try_start_mesh();
-		}
+	uint32_t failures = 0;
+	while (s_network_stage != NETWORK_STAGE_READY) {
+		esp_err_t err = network_start_step();
 		if (err == ESP_OK) {
-			ESP_LOGI(TAG, "mesh startup recovered");
-			s_startup_retry_task = NULL;
-			vTaskDelete(NULL);
+			failures = 0;
+			continue;
 		}
-		ESP_LOGW(TAG, "mesh startup retry failed: %s", esp_err_to_name(err));
+		failures++;
+		uint32_t delay_ms = failures < 3 ? 1000U : 10000U;
+		ESP_LOGW(TAG, "network stage %u retry %lu failed: %s",
+			 (unsigned)s_network_stage, (unsigned long)failures,
+			 esp_err_to_name(err));
+		vTaskDelay(pdMS_TO_TICKS(delay_ms));
 	}
+
+	const esp_partition_t *running = esp_ota_get_running_partition();
+	ESP_LOGI(TAG,
+		 "ready idf=%s app=%s slot=%s flash=%s app_ok=%u relay=%u ps=%u",
+		 esp_get_idf_version(), esp_app_get_description()->version,
+		 running ? running->label : "?", CONFIG_ESPTOOLPY_FLASHSIZE,
+		 s_application_healthy ? 1U : 0U,
+		 HUMIDIFIER_RELAY_ELIGIBLE ? 1U : 0U,
+		 esp_mesh_is_ps_enabled() ? 1U : 0U);
+	s_network_supervisor_task = NULL;
+	vTaskDelete(NULL);
 }
 
 static void detect_rollback_state(void)
@@ -585,75 +705,9 @@ void app_main(void)
 		ESP_LOGW(TAG, "continuing with network diagnostics in degraded mode");
 	}
 	detect_rollback_state();
-	esp_err_t err = init_nvs();
-	if (err != ESP_OK) {
-		ESP_LOGE(TAG, "NVS init failed: %s", esp_err_to_name(err));
-		return;
-	}
-	err = esp_netif_init();
-	if (err != ESP_OK) {
-		ESP_LOGE(TAG, "netif init failed: %s", esp_err_to_name(err));
-		return;
-	}
-	err = esp_event_loop_create_default();
-	if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-		ESP_LOGE(TAG, "event loop init failed: %s", esp_err_to_name(err));
-		return;
-	}
-	err = esp_netif_create_default_wifi_mesh_netifs(&s_netif_sta, NULL);
-	if (err != ESP_OK) {
-		ESP_LOGE(TAG, "mesh netif init failed: %s", esp_err_to_name(err));
-		return;
-	}
-
-	wifi_init_config_t wifi_config = WIFI_INIT_CONFIG_DEFAULT();
-	err = esp_wifi_init(&wifi_config);
-	if (err != ESP_OK) {
-		ESP_LOGE(TAG, "Wi-Fi init failed: %s", esp_err_to_name(err));
-		return;
-	}
-	err = esp_wifi_set_storage(WIFI_STORAGE_FLASH);
-	if (err != ESP_OK) {
-		ESP_LOGE(TAG, "Wi-Fi storage setup failed: %s", esp_err_to_name(err));
-		return;
-	}
-	err = esp_wifi_start();
-	if (err != ESP_OK) {
-		ESP_LOGW(TAG, "initial Wi-Fi start failed: %s", esp_err_to_name(err));
-	}
-
-	err = keemash_log_time_vprintf_start();
-	if (err != ESP_OK) {
-		ESP_LOGW(TAG, "timestamp log hook unavailable: %s", esp_err_to_name(err));
-	}
-	mesh_time_sync_init();
 	s_boot_seq = esp_random();
-	err = mesh_v2_link_init(TAG, HUMIDIFIER_RELAY_ELIGIBLE);
-	if (err != ESP_OK) {
-		ESP_LOGE(TAG, "mesh transport init failed: %s", esp_err_to_name(err));
-		return;
+	if (xTaskCreate(network_supervisor_task, "network_supervisor", 4096, NULL, 4,
+			&s_network_supervisor_task) != pdPASS) {
+		ESP_LOGE(TAG, "failed to create network supervisor");
 	}
-	err = keemash_mesh_ota_receiver_start();
-	if (err != ESP_OK) {
-		ESP_LOGE(TAG, "OTA receiver init failed: %s", esp_err_to_name(err));
-		return;
-	}
-
-	err = try_start_mesh();
-	if (err != ESP_OK) {
-		ESP_LOGW(TAG, "mesh startup failed: %s", esp_err_to_name(err));
-		if (xTaskCreate(startup_retry_task, "mesh_start_retry", 3072, NULL, 4,
-				&s_startup_retry_task) != pdPASS) {
-			ESP_LOGE(TAG, "failed to create mesh startup retry task");
-		}
-	}
-
-	const esp_partition_t *running = esp_ota_get_running_partition();
-	ESP_LOGI(TAG,
-		 "ready idf=%s app=%s slot=%s flash=%s app_ok=%u relay=%u ps=%u",
-		 esp_get_idf_version(), esp_app_get_description()->version,
-		 running ? running->label : "?", CONFIG_ESPTOOLPY_FLASHSIZE,
-		 s_application_healthy ? 1U : 0U,
-		 HUMIDIFIER_RELAY_ELIGIBLE ? 1U : 0U,
-		 esp_mesh_is_ps_enabled() ? 1U : 0U);
 }

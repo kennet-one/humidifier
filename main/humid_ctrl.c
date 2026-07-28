@@ -46,11 +46,8 @@ static uint8_t state_shadow(const humid_ctrl_status_t *state)
 	return value;
 }
 
-static esp_err_t commit_state(const humid_ctrl_status_t *next)
+static esp_err_t commit_state_locked(const humid_ctrl_status_t *next)
 {
-	if (!s_lock || xSemaphoreTake(s_lock, pdMS_TO_TICKS(200)) != pdTRUE) {
-		return ESP_ERR_TIMEOUT;
-	}
 	esp_err_t err = relay_block_write(state_shadow(next));
 	if (err == ESP_OK) {
 		s_status = *next;
@@ -60,7 +57,6 @@ static esp_err_t commit_state(const humid_ctrl_status_t *next)
 	} else {
 		s_status.last_error = err;
 	}
-	xSemaphoreGive(s_lock);
 	return err;
 }
 
@@ -90,7 +86,7 @@ esp_err_t humid_ctrl_publish_status(void)
 	humid_ctrl_get_status(&state);
 	char reply[16];
 	format_echo(&state, reply, sizeof(reply));
-	if (!legacy_send_to_root(reply)) return ESP_FAIL;
+	if (!legacy_send_state_to_root("humid", reply)) return ESP_FAIL;
 	esp_err_t led_err = water_led_echo_all();
 	ESP_LOGI(TAG, "status -> %s", reply);
 	return led_err;
@@ -121,23 +117,36 @@ esp_err_t humid_ctrl_init(void)
 static bool toggle_single(const char *text, esp_err_t *command_error,
 			  char *result, size_t result_size)
 {
-	humid_ctrl_status_t next;
-	humid_ctrl_get_status(&next);
 	const char *prefix = NULL;
+	const char *event_key = NULL;
+	uint8_t relay_kind = 0;
 	if (strcmp(text, "pomp") == 0) {
-		next.pump_on = !next.pump_on;
 		prefix = "13";
+		event_key = "pump";
+		relay_kind = 1;
 	} else if (strcmp(text, "flow") == 0) {
-		next.flow_on = !next.flow_on;
 		prefix = "16";
+		event_key = "flow";
+		relay_kind = 2;
 	} else if (strcmp(text, "ion") == 0) {
-		next.ion_on = !next.ion_on;
 		prefix = "17";
+		event_key = "ion";
+		relay_kind = 3;
 	} else {
 		return false;
 	}
 
-	esp_err_t err = commit_state(&next);
+	if (!s_lock || xSemaphoreTake(s_lock, pdMS_TO_TICKS(200)) != pdTRUE) {
+		if (command_error) *command_error = ESP_ERR_TIMEOUT;
+		copy_result(result, result_size, "lock_timeout");
+		return true;
+	}
+	humid_ctrl_status_t next = s_status;
+	if (relay_kind == 1) next.pump_on = !next.pump_on;
+	if (relay_kind == 2) next.flow_on = !next.flow_on;
+	if (relay_kind == 3) next.ion_on = !next.ion_on;
+	esp_err_t err = commit_state_locked(&next);
+	xSemaphoreGive(s_lock);
 	if (command_error) *command_error = err;
 	if (err != ESP_OK) {
 		copy_result(result, result_size, esp_err_to_name(err));
@@ -148,7 +157,7 @@ static bool toggle_single(const char *text, esp_err_t *command_error,
 		  : strcmp(prefix, "16") == 0 ? next.flow_on : next.ion_on;
 	char reply[8];
 	snprintf(reply, sizeof(reply), "%s%u", prefix, on ? 1U : 0U);
-	(void)legacy_send_to_root(reply);
+	(void)legacy_send_state_to_root(event_key, reply);
 	copy_result(result, result_size, reply);
 	return true;
 }
@@ -160,10 +169,21 @@ static bool set_turbo_command(const char *text, esp_err_t *command_error,
 	    text[2] < '0' || text[2] > '3') {
 		return false;
 	}
-	humid_ctrl_status_t next;
-	humid_ctrl_get_status(&next);
+	if (!s_lock || xSemaphoreTake(s_lock, pdMS_TO_TICKS(200)) != pdTRUE) {
+		if (command_error) *command_error = ESP_ERR_TIMEOUT;
+		copy_result(result, result_size, "lock_timeout");
+		return true;
+	}
+	humid_ctrl_status_t next = s_status;
+	if (!next.power_on) {
+		xSemaphoreGive(s_lock);
+		if (command_error) *command_error = ESP_ERR_INVALID_STATE;
+		copy_result(result, result_size, "power_off");
+		return true;
+	}
 	next.turbo = (uint8_t)(text[2] - '0');
-	esp_err_t err = commit_state(&next);
+	esp_err_t err = commit_state_locked(&next);
+	xSemaphoreGive(s_lock);
 	if (command_error) *command_error = err;
 	if (err != ESP_OK) {
 		copy_result(result, result_size, esp_err_to_name(err));
@@ -171,7 +191,7 @@ static bool set_turbo_command(const char *text, esp_err_t *command_error,
 	}
 	char reply[8];
 	snprintf(reply, sizeof(reply), "14%u", (unsigned)next.turbo);
-	(void)legacy_send_to_root(reply);
+	(void)legacy_send_state_to_root("turbo", reply);
 	copy_result(result, result_size, reply);
 	return true;
 }
@@ -180,8 +200,12 @@ static bool power_command(const char *text, esp_err_t *command_error,
 			  char *result, size_t result_size)
 {
 	if (strcmp(text, "huOn") != 0) return false;
-	humid_ctrl_status_t next;
-	humid_ctrl_get_status(&next);
+	if (!s_lock || xSemaphoreTake(s_lock, pdMS_TO_TICKS(200)) != pdTRUE) {
+		if (command_error) *command_error = ESP_ERR_TIMEOUT;
+		copy_result(result, result_size, "lock_timeout");
+		return true;
+	}
+	humid_ctrl_status_t next = s_status;
 	if (next.power_on) {
 		next.saved_turbo = next.turbo;
 		next.power_on = false;
@@ -197,7 +221,8 @@ static bool power_command(const char *text, esp_err_t *command_error,
 		next.turbo = next.saved_turbo;
 	}
 
-	esp_err_t err = commit_state(&next);
+	esp_err_t err = commit_state_locked(&next);
+	xSemaphoreGive(s_lock);
 	if (command_error) *command_error = err;
 	if (err != ESP_OK) {
 		copy_result(result, result_size, esp_err_to_name(err));
@@ -205,7 +230,7 @@ static bool power_command(const char *text, esp_err_t *command_error,
 	}
 	char reply[16];
 	format_echo(&next, reply, sizeof(reply));
-	(void)legacy_send_to_root(reply);
+	(void)legacy_send_state_to_root("humid", reply);
 	(void)water_led_echo_all();
 	copy_result(result, result_size, reply);
 	return true;
@@ -222,7 +247,7 @@ bool humid_ctrl_handle_command(const char *text, esp_err_t *command_error,
 		humid_ctrl_get_status(&state);
 		char reply[16];
 		format_echo(&state, reply, sizeof(reply));
-		(void)legacy_send_to_root(reply);
+		(void)legacy_send_state_to_root("humid", reply);
 		esp_err_t err = water_led_echo_all();
 		if (command_error) *command_error = err;
 		copy_result(result, result_size, reply);

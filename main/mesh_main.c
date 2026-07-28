@@ -45,6 +45,8 @@
 #define RECOVERY_RESTART_MS 75000U
 #define RECOVERY_LOG_MS 15000U
 #define RECOVERY_ACTION_BACKOFF_MS 20000U
+#define SECURITY_TIMEOUT_RESTART_STREAK 2U
+#define V1_REJECT_LOG_MS 15000U
 
 #ifdef CONFIG_HUMIDIFIER_MESH_RELAY_ELIGIBLE
 #define HUMIDIFIER_RELAY_ELIGIBLE true
@@ -75,6 +77,8 @@ static _Atomic uint32_t s_last_burst_ms;
 static _Atomic uint32_t s_last_recovery_log_ms;
 static _Atomic uint32_t s_last_recovery_action_ms;
 static _Atomic uint32_t s_last_soft_reconnect_ms;
+static _Atomic uint32_t s_last_v1_reject_log_ms;
+static _Atomic uint32_t s_v1_reject_count;
 static _Atomic uint32_t s_boot_seq;
 static _Atomic uint16_t s_parent_disconnect_count;
 static _Atomic uint16_t s_no_parent_count;
@@ -85,7 +89,9 @@ static _Atomic uint16_t s_ack_stale_count;
 static _Atomic uint16_t s_tx_without_ack_count;
 static _Atomic uint8_t s_last_parent_disconnect_reason;
 static _Atomic uint8_t s_last_recovery_reason;
+static _Atomic uint8_t s_security_timeout_streak;
 static _Atomic recovery_phase_t s_recovery_phase = RECOVERY_OK;
+static _Atomic bool s_fast_restart_requested;
 static _Atomic bool s_rollback_pending;
 static _Atomic bool s_telemetry_synced;
 static bool s_application_healthy;
@@ -279,6 +285,21 @@ static void recovery_task(void *arg)
 		mark_rollback_valid_when_healthy();
 		update_diagnostics();
 
+		if (!keemash_mesh_ota_receiver_active() &&
+		    atomic_exchange(&s_fast_restart_requested, false)) {
+			s_recovery_phase = RECOVERY_MESH_RESTART;
+			s_mesh_restart_count++;
+			s_last_recovery_reason = MESH_V2_RECOVERY_REASON_MESH_RESTART;
+			s_last_recovery_action_ms = now;
+			esp_err_t err = full_mesh_restart();
+			ESP_LOGW(TAG, "fast mesh restart after security timeouts: %s",
+				 esp_err_to_name(err));
+			s_security_timeout_streak = 0;
+			s_unhealthy_since_ms = tick_ms();
+			s_last_soft_reconnect_ms = 0;
+			continue;
+		}
+
 		if (!s_parent_connected) {
 			if (s_unhealthy_since_ms == 0) s_unhealthy_since_ms = now;
 			uint32_t down_ms = now - s_unhealthy_since_ms;
@@ -314,6 +335,8 @@ static void recovery_task(void *arg)
 			s_unhealthy_since_ms = 0;
 			s_last_recovery_reason = MESH_V2_RECOVERY_REASON_NONE;
 			s_last_soft_reconnect_ms = 0;
+			s_security_timeout_streak = 0;
+			s_fast_restart_requested = false;
 			if (!s_telemetry_synced) {
 				s_telemetry_synced = true;
 				send_telemetry_burst();
@@ -370,6 +393,7 @@ static void mesh_rx_task(void *arg)
 		esp_err_t err = esp_mesh_recv(&from, &data, portMAX_DELAY, &flags, NULL, 0);
 		if (err != ESP_OK) {
 			if (!s_mesh_recovering) ESP_LOGW(TAG, "mesh RX failed: %s", esp_err_to_name(err));
+			else vTaskDelay(pdMS_TO_TICKS(50));
 			continue;
 		}
 		if (data.size < sizeof(mesh_pkt_hdr_t)) continue;
@@ -383,16 +407,36 @@ static void mesh_rx_task(void *arg)
 		if (header->version != MESH_PKT_VERSION) continue;
 		uint8_t expected_root[6] = {0};
 		bool have_protocol_root = mesh_v2_node_get_root_mac(expected_root);
-		const uint8_t *root_identity = have_protocol_root
-			? expected_root : s_root_mesh_addr.addr;
+		uint8_t root_identity[6] = {0};
+		if (have_protocol_root) {
+			memcpy(root_identity, expected_root, sizeof(root_identity));
+		} else {
+			uint8_t root_mesh_ap[6] = {0};
+			portENTER_CRITICAL(&s_runtime_lock);
+			memcpy(root_mesh_ap, s_root_mesh_addr.addr, sizeof(root_mesh_ap));
+			portEXIT_CRITICAL(&s_runtime_lock);
+			(void)humidifier_root_sta_from_mesh_ap(root_mesh_ap, root_identity);
+		}
 		bool have_root_identity = memcmp(root_identity,
 						 (const uint8_t[6]){0}, 6) != 0;
+		bool lossless_negotiated = mesh_v2_node_lossless_negotiated();
 		if (!have_root_identity ||
 		    !humidifier_v1_origin_allowed(
 			    from.addr, header->src_mac, root_identity,
-			    mesh_v2_node_lossless_negotiated())) {
-			ESP_LOGW(TAG, "rejected V1 type=%u from non-root " MACSTR,
-				 (unsigned)header->type, MAC2STR(from.addr));
+			    lossless_negotiated)) {
+			uint32_t reject_count =
+				atomic_fetch_add(&s_v1_reject_count, 1) + 1;
+			uint32_t now = tick_ms();
+			if (s_last_v1_reject_log_ms == 0 ||
+			    now - s_last_v1_reject_log_ms >= V1_REJECT_LOG_MS) {
+				s_last_v1_reject_log_ms = now;
+				ESP_LOGW(TAG,
+					 "rejected V1 type=%u source=" MACSTR
+					 " lossless=%u count=%lu",
+					 (unsigned)header->type, MAC2STR(from.addr),
+					 lossless_negotiated ? 1U : 0U,
+					 (unsigned long)reject_count);
+			}
 			continue;
 		}
 
@@ -475,6 +519,15 @@ static void mesh_event_handler(void *arg, esp_event_base_t base,
 		s_last_parent_disconnect_reason = (uint8_t)event->reason;
 		s_last_recovery_reason = MESH_V2_RECOVERY_REASON_PARENT_DISC;
 		s_unhealthy_since_ms = tick_ms();
+		if (event->reason == WIFI_REASON_HANDSHAKE_TIMEOUT ||
+		    event->reason == WIFI_REASON_SA_QUERY_TIMEOUT) {
+			uint8_t streak = s_security_timeout_streak;
+			if (streak < UINT8_MAX) streak++;
+			s_security_timeout_streak = streak;
+			if (streak >= SECURITY_TIMEOUT_RESTART_STREAK) {
+				s_fast_restart_requested = true;
+			}
+		}
 		mesh_v2_link_parent_disconnected();
 		mesh_log_stream_clear_tx_accepted();
 		ESP_LOGW(TAG, "parent disconnected reason=%d", event->reason);

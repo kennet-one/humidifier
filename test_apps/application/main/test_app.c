@@ -270,6 +270,12 @@ static void test_v1_origin_policy_is_root_bound_and_sticky(void)
 	TEST_ASSERT_FALSE(humidifier_v1_origin_allowed(other, other, root, false));
 	TEST_ASSERT_FALSE(humidifier_v1_origin_allowed(root, root, zero, false));
 	TEST_ASSERT_FALSE(humidifier_v1_origin_allowed(root, root, root, true));
+
+	const uint8_t root_ap[6] = {0xb4, 0x3a, 0x45, 0xa7, 0x86, 0x8d};
+	const uint8_t root_sta[6] = {0xb4, 0x3a, 0x45, 0xa7, 0x86, 0x8c};
+	uint8_t derived_root[6] = {0};
+	TEST_ASSERT_TRUE(humidifier_root_sta_from_mesh_ap(root_ap, derived_root));
+	TEST_ASSERT_EQUAL_HEX8_ARRAY(root_sta, derived_root, sizeof(root_sta));
 }
 
 void app_main(void)

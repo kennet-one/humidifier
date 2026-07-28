@@ -14,7 +14,7 @@ dependencies:
       type: idf
     version: 6.0.1
   keemash_mesh_core:
-    component_hash: 444bbd356bbd9eb6e2152a244e8f386fb4e37ec5ea061131fcf17cb4585381b6
+    component_hash: a42c9d8aa5ef063cac97bf720ba90c5a0ea87d6161164a277c89a65aae4461ef
     dependencies:
     - name: idf
       version: '>=6.0.1,<6.1'
@@ -22,11 +22,11 @@ dependencies:
       git: https://github.com/kennet-one/keemash_core.git
       path: .
       type: git
-    version: 03bc51ae2ad2d975456fb6c34b4629cc51ef126f
+    version: da95f7a3680c202b0618014c98812298b38fd851
 direct_dependencies:
 - espressif/led_strip
 - idf
 - keemash_mesh_core
-manifest_hash: d8e08014c2bf5414b9a89d3d67854636a147258f5106a1f1bffa7782775634ff
+manifest_hash: 0976a3b0119c52516fdfbc8b2b8450b5b1f2c76efd590a8e8fba96aa9afc81a0
 target: esp32
 version: 3.0.0

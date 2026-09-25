@@ -175,13 +175,8 @@ static bool set_turbo_command(const char *text, esp_err_t *command_error,
 		return true;
 	}
 	humid_ctrl_status_t next = s_status;
-	if (!next.power_on) {
-		xSemaphoreGive(s_lock);
-		if (command_error) *command_error = ESP_ERR_INVALID_STATE;
-		copy_result(result, result_size, "power_off");
-		return true;
-	}
 	next.turbo = (uint8_t)(text[2] - '0');
+	if (next.turbo != 0) next.saved_turbo = next.turbo;
 	esp_err_t err = commit_state_locked(&next);
 	xSemaphoreGive(s_lock);
 	if (command_error) *command_error = err;

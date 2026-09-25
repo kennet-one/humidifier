@@ -25,6 +25,7 @@
 
 #include "keemash_log_time_vprintf.h"
 #include "keemash_mesh_node.h"
+#include "keemash_mesh_network.h"
 #include "keemash_mesh_ota_receiver.h"
 #include "legacy_proto.h"
 #include "legacy_root_sender.h"
@@ -162,7 +163,8 @@ static esp_err_t fill_mesh_config(mesh_cfg_t *config)
 
 static esp_err_t configure_mesh(void)
 {
-	esp_err_t err = esp_mesh_fix_root(false);
+	esp_err_t err = keemash_mesh_apply_single_root_policy(
+		KEEMASH_MESH_ROLE_NODE);
 	if (err != ESP_OK) return err;
 	if ((err = esp_mesh_set_topology(CONFIG_MESH_TOPOLOGY)) != ESP_OK) return err;
 	if ((err = esp_mesh_set_max_layer(CONFIG_MESH_MAX_LAYER)) != ESP_OK) return err;

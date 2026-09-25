@@ -203,7 +203,7 @@ static void test_fan_and_power_transitions_use_complete_shadow(void)
 	TEST_ASSERT_TRUE(on.pump_on);
 	TEST_ASSERT_TRUE(on.flow_on);
 	TEST_ASSERT_TRUE(on.ion_on);
-	TEST_ASSERT_EQUAL_UINT8(1, on.turbo);
+	TEST_ASSERT_EQUAL_UINT8(2, on.turbo);
 
 	TEST_ASSERT_TRUE(legacy_handle_command("huOn", &err, result, sizeof(result)));
 	TEST_ASSERT_EQUAL_STRING("150111", result);
@@ -213,23 +213,39 @@ static void test_fan_and_power_transitions_use_complete_shadow(void)
 	TEST_ASSERT_EQUAL_HEX8(0xff, off.relay_shadow);
 }
 
-static void test_turbo_rejected_while_power_is_off(void)
+static void test_turbo_is_independent_of_legacy_power(void)
 {
 	init_controller();
-	humid_ctrl_status_t before;
-	humid_ctrl_get_status(&before);
-	uint8_t hardware_before = s_relay_shadow;
-
 	esp_err_t err = ESP_OK;
 	char result[32] = {0};
 	TEST_ASSERT_TRUE(legacy_handle_command("143", &err, result, sizeof(result)));
-	TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, err);
-	TEST_ASSERT_EQUAL_STRING("power_off", result);
+	TEST_ASSERT_EQUAL(ESP_OK, err);
+	TEST_ASSERT_EQUAL_STRING("143", result);
 
-	humid_ctrl_status_t after;
-	humid_ctrl_get_status(&after);
-	TEST_ASSERT_EQUAL_MEMORY(&before, &after, sizeof(before));
-	TEST_ASSERT_EQUAL_HEX8(hardware_before, s_relay_shadow);
+	humid_ctrl_status_t state;
+	humid_ctrl_get_status(&state);
+	TEST_ASSERT_FALSE(state.power_on);
+	TEST_ASSERT_FALSE(state.pump_on);
+	TEST_ASSERT_FALSE(state.flow_on);
+	TEST_ASSERT_FALSE(state.ion_on);
+	TEST_ASSERT_EQUAL_UINT8(3, state.turbo);
+	TEST_ASSERT_EQUAL_UINT8(3, state.saved_turbo);
+	TEST_ASSERT_EQUAL_HEX8(0xf7, state.relay_shadow);
+	TEST_ASSERT_EQUAL_HEX8(0xf7, s_relay_shadow);
+
+	TEST_ASSERT_TRUE(legacy_handle_command("140", &err, result, sizeof(result)));
+	TEST_ASSERT_EQUAL(ESP_OK, err);
+	TEST_ASSERT_EQUAL_STRING("140", result);
+	humid_ctrl_get_status(&state);
+	TEST_ASSERT_EQUAL_UINT8(0, state.turbo);
+	TEST_ASSERT_EQUAL_HEX8(0xff, state.relay_shadow);
+
+	s_relay_write_error = ESP_FAIL;
+	TEST_ASSERT_TRUE(legacy_handle_command("142", &err, result, sizeof(result)));
+	TEST_ASSERT_EQUAL(ESP_FAIL, err);
+	humid_ctrl_get_status(&state);
+	TEST_ASSERT_EQUAL_UINT8(0, state.turbo);
+	TEST_ASSERT_EQUAL_HEX8(0xff, state.relay_shadow);
 }
 
 static void test_dispatch_rejects_malformed_and_reports_pms_busy(void)
@@ -284,7 +300,7 @@ void app_main(void)
 	RUN_TEST(test_safe_initial_state);
 	RUN_TEST(test_relay_state_changes_only_after_hardware_success);
 	RUN_TEST(test_fan_and_power_transitions_use_complete_shadow);
-	RUN_TEST(test_turbo_rejected_while_power_is_off);
+	RUN_TEST(test_turbo_is_independent_of_legacy_power);
 	RUN_TEST(test_dispatch_rejects_malformed_and_reports_pms_busy);
 	RUN_TEST(test_v1_origin_policy_is_root_bound_and_sticky);
 	int failures = UNITY_END();
